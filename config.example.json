@@ -1,0 +1,13 @@
+{
+  "slots": {
+    "1": "ndi:StudioCam1",
+    "2": "ndi:StudioCam2",
+    "3": "sdi:0",
+    "4": "sdi:1"
+  },
+  "layout": 4,
+  "primarySlot": 1,
+  "controlEnabled": true,
+  "port": 8080
+}
+
