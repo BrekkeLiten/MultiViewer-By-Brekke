@@ -117,6 +117,16 @@ enum NDILibraryLoader {
         return paths
     }
 
+    private static func packagedAppFrameworkDylibPaths() -> [String] {
+        guard Bundle.main.bundleURL.pathExtension == "app" else { return [] }
+        let bundleFrameworks = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks").path
+        return [
+            "\(bundleFrameworks)/libndi.3.dylib",
+            "\(bundleFrameworks)/libndi.dylib",
+            "\(bundleFrameworks)/libndi.4.dylib",
+        ]
+    }
+
     private static func openNDIDylib() throws -> UnsafeMutableRawPointer {
         var paths: [String] = []
 
@@ -129,11 +139,12 @@ enum NDILibraryLoader {
             paths.append("\(env)/lib/macOS/libndi.dylib")
         }
 
+        // Prefer runtime shipped inside the .app (NDI SDK redistribution) before system installs.
+        paths.append(contentsOf: packagedAppFrameworkDylibPaths())
+
         paths.append(contentsOf: ndiToolsBundledDylibPaths())
 
         let home = FileManager.default.homeDirectoryForCurrentUser.path
-        // Packaged app: ship `libndi.3.dylib` in Contents/Frameworks (user must supply; NDI license applies).
-        let bundleFrameworks = Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks").path
 
         paths.append(contentsOf: [
             "/Library/NDI/libndi.3.dylib",
@@ -149,8 +160,6 @@ enum NDILibraryLoader {
             "/opt/homebrew/lib/libndi.dylib",
             "/usr/local/lib/libndi.3.dylib",
             "/usr/local/lib/libndi.dylib",
-            "\(bundleFrameworks)/libndi.3.dylib",
-            "\(bundleFrameworks)/libndi.dylib",
             "libndi.3.dylib",
             "libndi.dylib",
         ])

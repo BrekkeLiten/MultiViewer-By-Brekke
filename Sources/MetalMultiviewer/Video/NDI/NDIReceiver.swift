@@ -273,9 +273,18 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
         }
 
         let par = video.picture_aspect_ratio
-        let dar: Float = par > 0.001 ? par : Float(w) / Float(max(h, 1))
-
+        let pixelAR = Float(w) / Float(max(h, 1))
         lock.lock()
+        let progW = programSourceWidth
+        let progH = programSourceHeight
+        let dar: Float
+        if par > 0.001 {
+            dar = par
+        } else if progW > 0, progH > 0 {
+            dar = Float(progW) / Float(progH)
+        } else {
+            dar = pixelAR
+        }
         broadcastAspectWidthOverHeight = max(dar, 0.01)
 
         if textureWidth != uploadW || textureHeight != uploadH {
@@ -428,7 +437,9 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
         if playback.ndiBandwidth >= 100 {
             programSourceWidth = w
             programSourceHeight = h
-        } else if !Self.isLikelyPreviewPixelSize(width: w, height: h) {
+        } else if !Self.isLikelyPreviewPixelSize(width: w, height: h),
+                  programSourceWidth <= 0 || programSourceHeight <= 0
+        {
             programSourceWidth = w
             programSourceHeight = h
         }
@@ -476,8 +487,9 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
         return String(decoding: bytes, as: UTF8.self)
     }
 
+    /// Low-bandwidth NDI preview frames are often much smaller than program resolution.
     private static func isLikelyPreviewPixelSize(width: Int, height: Int) -> Bool {
-        max(width, height) <= 640
+        max(width, height) <= 640 || min(width, height) <= 240
     }
 
     private func connectionLogLabel() -> String {

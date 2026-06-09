@@ -50,6 +50,26 @@ enum SourceDisplayLabels {
         )
     }
 
+    /// Compact label for multiview HUD badges (source name + optional resolution).
+    static func multiviewBadgeText(
+        slot: Int,
+        sourcePersistenceString: String?,
+        pixelWidth: Int,
+        pixelHeight: Int
+    ) -> String {
+        guard let raw = sourcePersistenceString?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              raw != noneChoice
+        else {
+            return "Slot \(slot)"
+        }
+        let name = displayLabel(for: raw)
+        if pixelWidth > 0, pixelHeight > 0 {
+            return "\(name) · \(pixelWidth)×\(pixelHeight)"
+        }
+        return name
+    }
+
     private static func shortenNDIHost(_ host: String) -> String {
         var h = host.trimmingCharacters(in: .whitespacesAndNewlines)
         if h.uppercased().hasSuffix(".LOCAL") {

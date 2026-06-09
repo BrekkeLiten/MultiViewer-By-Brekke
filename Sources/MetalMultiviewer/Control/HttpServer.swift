@@ -9,11 +9,13 @@ extension Notification.Name {
 final class ControlServer {
     private let server = HttpServer()
     private let state: AppState
+    private let monitoringStore: PictureMonitoringStore?
     private(set) var boundPort: in_port_t?
     private(set) var boundBindAddress: String?
 
-    init(state: AppState) {
+    init(state: AppState, monitoringStore: PictureMonitoringStore? = nil) {
         self.state = state
+        self.monitoringStore = monitoringStore
     }
 
     func start(port: in_port_t, bindAddress: String) throws {
@@ -22,10 +24,19 @@ final class ControlServer {
                 return .internalServerError
             }
             let snap = state.get()
-            let body: [String: Any] = [
+            var body: [String: Any] = [
                 "layout": snap.layout.rawValue,
                 "primarySlot": snap.primarySlot,
             ]
+            if let store = monitoringStore {
+                let m = store.get()
+                body["monitoring"] = [
+                    "focusPeaking": m.focusPeakingEnabled,
+                    "falseColor": m.falseColorEnabled,
+                    "zebra": m.zebraEnabled,
+                    "zebraLevel": m.zebraLevel,
+                ]
+            }
             return .ok(.json(body))
         }
 
@@ -82,10 +93,66 @@ final class ControlServer {
             }
         }
 
+        registerMonitoringRoutes()
+
         server.listenAddressIPv4 = bindAddress
         try server.start(port, forceIPv4: true)
         boundPort = port
         boundBindAddress = bindAddress
+    }
+
+    private func registerMonitoringRoutes() {
+        server.POST["/monitoring/peaking/toggle"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.focusPeakingEnabled.toggle() }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/peaking/on"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.focusPeakingEnabled = true }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/peaking/off"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.focusPeakingEnabled = false }
+            return .ok(.json(["ok": true]))
+        }
+
+        server.POST["/monitoring/falsecolor/toggle"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.falseColorEnabled.toggle() }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/falsecolor/on"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.falseColorEnabled = true }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/falsecolor/off"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.falseColorEnabled = false }
+            return .ok(.json(["ok": true]))
+        }
+
+        server.POST["/monitoring/zebra/toggle"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.zebraEnabled.toggle() }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/zebra/on"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.zebraEnabled = true }
+            return .ok(.json(["ok": true]))
+        }
+        server.POST["/monitoring/zebra/off"] = { [weak self] _ in
+            self?.monitoringStore?.mutate { $0.zebraEnabled = false }
+            return .ok(.json(["ok": true]))
+        }
+
+        server.POST["/monitoring/zebra/:percent"] = { [weak self] request in
+            guard
+                let pctStr = request.params[":percent"],
+                let pct = Int(pctStr),
+                [70, 80, 90, 95, 100].contains(pct)
+            else {
+                return .badRequest(.json(["ok": false, "error": "invalid_zebra_level"]))
+            }
+            let level = Float(pct) / 100.0
+            self?.monitoringStore?.mutate { $0.zebraLevel = level }
+            return .ok(.json(["ok": true, "zebraLevel": level]))
+        }
     }
 
     func stop() {
@@ -118,4 +185,3 @@ final class ControlServer {
         }
     }
 }
-

@@ -4,6 +4,7 @@ import Foundation
 enum DisplayUploadGeometry {
     enum Layout {
         case oneUp(primarySlot: Int)
+        case oneUpScopeMonitor(primarySlot: Int, split: ScopeMonitorSplit)
         case fourUp
     }
 
@@ -20,6 +21,10 @@ enum DisplayUploadGeometry {
         case let .oneUp(primary):
             guard slot == primary else { return (0, 0) }
             return (vw, vh)
+        case let .oneUpScopeMonitor(primary, split):
+            guard slot == primary else { return (0, 0) }
+            return (max(Int(Float(vw) * split.columnFraction), 1),
+                    max(Int(Float(vh) * split.rowFraction), 1))
         case .fourUp:
             guard (1 ... 4).contains(slot) else { return (0, 0) }
             return (max(vw / 2, 1), max(vh / 2, 1))

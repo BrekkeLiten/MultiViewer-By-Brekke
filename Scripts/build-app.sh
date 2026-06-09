@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_NAME="MultiViewer by Brekke"
 BUNDLE_ID="com.brekke.multiviewer"
 BUILD_CONFIG="${1:-release}"
@@ -46,6 +47,8 @@ cat > "$CONTENTS/Info.plist" <<EOF
     <string>6.0</string>
     <key>CFBundleName</key>
     <string>$APP_NAME</string>
+    <key>CFBundleDisplayName</key>
+    <string>$APP_NAME</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -60,5 +63,18 @@ cat > "$CONTENTS/Info.plist" <<EOF
 </plist>
 EOF
 
+chmod +x "$SCRIPT_DIR/bundle-ndi.sh"
+if [[ -n "${NDI_SDK_DIR:-}" ]]; then
+    "$SCRIPT_DIR/bundle-ndi.sh" "$APP_DIR" "$NDI_SDK_DIR"
+else
+    echo "Warning: NDI_SDK_DIR not set — app built without bundled NDI runtime." >&2
+    echo "         Users must install NDI Tools, or set NDI_SDK_DIR before building for release." >&2
+    echo "         See docs/NDI-BUNDLING.md" >&2
+fi
+
 echo "Built $APP_DIR"
 echo "Open with: open \"$APP_DIR\""
+
+# Code signing / notarization (manual — required before wide distribution with bundled dylibs):
+#   codesign --force --options runtime --sign "Developer ID Application: …" "$APP_DIR"
+#   xcrun notarytool submit … && xcrun stapler staple "$APP_DIR"

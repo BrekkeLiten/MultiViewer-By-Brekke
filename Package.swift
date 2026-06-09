@@ -3,10 +3,12 @@
 
 import PackageDescription
 
+let appInfoPlist = "Sources/MetalMultiviewer/Resources/AppInfo.plist"
+
 let package = Package(
     name: "MetalMultiviewer",
     platforms: [
-        .macOS(.v13),
+        .macOS(.v14),
     ],
     dependencies: [
         .package(url: "https://github.com/httpswift/swifter.git", from: "1.5.0"),
@@ -41,6 +43,12 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Accelerate"),
                 .linkedFramework("SystemConfiguration"),
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", appInfoPlist,
+                ], .when(platforms: [.macOS])),
             ]
         ),
         .testTarget(

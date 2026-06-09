@@ -14,6 +14,25 @@ struct AppConfig: Codable, Equatable {
     var previewMaxFPS: Double?
     /// When **false**, NDI recv uses SDK low-bandwidth mode. Omit/`nil`/`true` ⇒ full source quality (default).
     var ndiFullQuality: Bool?
+    /// When **true**, 1-up layout shows picture + vectorscope + RGB waveform + RGB parade (LiveScopes-style). Omit/`nil` ⇒ off.
+    var oneUpScopeMonitor: Bool?
+    /// Left column width in 1-up scope monitor (0.30…0.85). Omit/`nil` ⇒ 0.64.
+    var scopeColumnSplit: Float?
+    /// Top row height in 1-up scope monitor (0.35…0.90). Omit/`nil` ⇒ 0.72.
+    var scopeRowSplit: Float?
+    var focusPeakingEnabled: Bool?
+    var falseColorEnabled: Bool?
+    var zebraEnabled: Bool?
+    /// `green`, `red`, `white`, or `yellow`.
+    var focusPeakingColor: String?
+    var focusPeakingSensitivity: Float?
+    /// Zebra threshold 0.70…1.00 (70–100% IRE).
+    var zebraLevel: Float?
+}
+
+extension Notification.Name {
+    /// Posted when `oneUpScopeMonitor` preference changes (live apply, no restart).
+    static let metalMultiviewerScopeMonitorChanged = Notification.Name("MetalMultiviewerScopeMonitorChanged")
 }
 
 /// Live monitoring playback: full NDI quality by default, capped upload rate, display-sized downscale before GPU.
@@ -39,7 +58,25 @@ struct MonitorPlayback: Sendable {
 extension AppConfig {
     /// Default “no saved file” baseline; new fields stay `nil` so `MonitorPlayback.from` supplies monitoring defaults.
     static var empty: AppConfig {
-        AppConfig(slots: nil, layout: nil, primarySlot: nil, port: nil, controlBindAddress: nil, controlEnabled: nil, previewMaxFPS: nil, ndiFullQuality: nil)
+        AppConfig(
+            slots: nil,
+            layout: nil,
+            primarySlot: nil,
+            port: nil,
+            controlBindAddress: nil,
+            controlEnabled: nil,
+            previewMaxFPS: nil,
+            ndiFullQuality: nil,
+            oneUpScopeMonitor: nil,
+            scopeColumnSplit: nil,
+            scopeRowSplit: nil,
+            focusPeakingEnabled: nil,
+            falseColorEnabled: nil,
+            zebraEnabled: nil,
+            focusPeakingColor: nil,
+            focusPeakingSensitivity: nil,
+            zebraLevel: nil
+        )
     }
 }
 
@@ -87,6 +124,31 @@ enum ConfigLoader {
 
     static func effectiveControlEnabled(config: AppConfig?) -> Bool {
         config?.controlEnabled ?? true
+    }
+
+    static func effectiveOneUpScopeMonitor(config: AppConfig?) -> Bool {
+        config?.oneUpScopeMonitor == true
+    }
+
+    static func effectiveScopeMonitorSplit(config: AppConfig?) -> ScopeMonitorSplit {
+        ScopeMonitorSplit.clamped(
+            columnFraction: config?.scopeColumnSplit,
+            rowFraction: config?.scopeRowSplit
+        )
+    }
+
+    static func effectivePictureMonitoring(config: AppConfig?) -> PictureMonitoringSettings {
+        guard let config else { return .defaults }
+        var settings = PictureMonitoringSettings.defaults
+        if let v = config.focusPeakingEnabled { settings.focusPeakingEnabled = v }
+        if let v = config.falseColorEnabled { settings.falseColorEnabled = v }
+        if let v = config.zebraEnabled { settings.zebraEnabled = v }
+        if let raw = config.focusPeakingColor, let color = FocusPeakingColor(rawValue: raw) {
+            settings.focusPeakingColor = color
+        }
+        if let v = config.focusPeakingSensitivity { settings.focusPeakingSensitivity = v }
+        if let v = config.zebraLevel { settings.zebraLevel = v }
+        return settings.clamped()
     }
 
     static func defaultLayout(config: AppConfig?) -> AppState.LayoutMode {

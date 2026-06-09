@@ -38,14 +38,14 @@ final class SourceManager: @unchecked Sendable {
             if current == desired {
                 if let monitorable = existingProvider as? MonitorableProvider,
                    let last = monitorable.lastFrameAt,
-                   Date().timeIntervalSince(last) > 2.0
+                   Date().timeIntervalSince(last) > FeedSignalPolicy.staleInterval
                 {
                     let now = Date()
                     lock.lock()
                     let lastRestart = lastRestartAt[slot]
                     lock.unlock()
 
-                    if lastRestart == nil || now.timeIntervalSince(lastRestart!) > 2.0 {
+                    if lastRestart == nil || now.timeIntervalSince(lastRestart!) > FeedSignalPolicy.staleInterval {
                         restartProvider(slot: slot, desired: desired, renderer: renderer)
                     }
                 }
@@ -64,11 +64,18 @@ final class SourceManager: @unchecked Sendable {
         viewportWidth: Int,
         viewportHeight: Int,
         layout: AppState.LayoutMode,
-        primarySlot: Int
+        primarySlot: Int,
+        oneUpScopeMonitor: Bool,
+        scopeMonitorSplit: ScopeMonitorSplit = .defaults
     ) {
-        let geometryLayout: DisplayUploadGeometry.Layout = layout == .oneUp
-            ? .oneUp(primarySlot: primarySlot)
-            : .fourUp
+        let geometryLayout: DisplayUploadGeometry.Layout = switch layout {
+        case .oneUp where oneUpScopeMonitor:
+            .oneUpScopeMonitor(primarySlot: primarySlot, split: scopeMonitorSplit)
+        case .oneUp:
+            .oneUp(primarySlot: primarySlot)
+        case .fourUp:
+            .fourUp
+        }
 
         lock.lock()
         let providerSnapshot = providers
@@ -122,6 +129,33 @@ final class SourceManager: @unchecked Sendable {
                 provider.setTargetUploadSize(width: fit.width, height: fit.height)
             }
         }
+    }
+
+    func feedSignalStatusBySlot(snapshot: AppState.Snapshot) -> [Int: FeedSignalStatus] {
+        lock.lock()
+        let providerSnapshot = providers
+        let restartSnapshot = lastRestartAt
+        lock.unlock()
+
+        var out: [Int: FeedSignalStatus] = [:]
+        for slot in 1 ... 4 {
+            let assignment = snapshot.slots[slot]
+            let provider = providerSnapshot[slot]
+            let monitorable = provider as? MonitorableProvider
+            out[slot] = FeedSignalPolicy.status(
+                assignment: assignment,
+                hasProvider: assignment != nil && provider != nil,
+                lastFrameAt: monitorable?.lastFrameAt,
+                lastRestartAt: restartSnapshot[slot],
+                hasDisplayableTexture: Self.hasDisplayableTexture(provider: provider)
+            )
+        }
+        return out
+    }
+
+    private static func hasDisplayableTexture(provider: FrameProvider?) -> Bool {
+        guard let tex = provider?.copyLatestTexture() else { return false }
+        return tex.width > 2 && tex.height > 2
     }
 
     func feedDimensionsBySlot() -> [Int: (width: Int, height: Int)] {

@@ -1,8 +1,10 @@
 # MultiViewer by Brekke
 
+**Website:** [multiviewer.brek.ke](https://multiviewer.brek.ke) · landing page source in [`website/`](website/)
+
 Native **macOS** app that shows up to **four live video feeds** in a Metal-powered multiview (**1-up** or **4-up**), with a small **HTTP control API** suited for **[Bitfocus Companion](https://bitfocus.io/companion/)** or any system that can send `POST` requests.
 
-NDI ingestion uses the vendor **NDI runtime** (`libndi.dylib` / `libndi.3.dylib`) loaded at runtime. **Blackmagic DeckLink SDI** uses the DeckLink APIs from Blackmagic Desktop Video—the app lists devices and captures when drivers are installed.
+NDI ingestion uses the vendor **NDI® runtime** (`libndi.dylib` / `libndi.3.dylib`) loaded at runtime. Official **release builds** bundle the SDK runtime inside the app (see [NDI runtime](#ndi-runtime)). **Blackmagic DeckLink SDI** uses the DeckLink APIs from Blackmagic Desktop Video—the app lists devices and captures when drivers are installed.
 
 ## Requirements
 
@@ -10,7 +12,7 @@ NDI ingestion uses the vendor **NDI runtime** (`libndi.dylib` / `libndi.3.dylib`
 |------|------|
 | **macOS** | 13+ (SwiftPM package platform) |
 | **Swift** | Toolchain matching `Package.swift` (Swift 6.3 family) |
-| **NDI** | A working **`libndi`** on the machine (see [NDI setup](#ndi-runtime-setup)) |
+| **NDI** | **Included** in release `.app` builds (bundled at build time). Dev/`swift run` can use a system install — see [NDI runtime](#ndi-runtime) |
 | **DeckLink (SDI)** | **Blackmagic Desktop Video** drivers for macOS plus a compatible DeckLink/UltraStudio device; configure SDI connection in Desktop Video Setup if needed. |
 
 ## Features
@@ -19,6 +21,8 @@ NDI ingestion uses the vendor **NDI runtime** (`libndi.dylib` / `libndi.3.dylib`
 - **NDI receivers**: Sources from **NDI Finder** when possible; bonjour **`_ndi._tcp`** as fallback; **`ndi:IPv4:port`** for direct IP connect.
 - **Aspect ratio**: Incoming **NDI/SDI** frames are letterboxed/pillarboxed to match **broadcast display aspect** (NDI `picture_aspect_ratio`, or pixel size when unset).
 - **On-screen HUD**: Upper-right label shows **NDI · WxH / SDI · WxH** (and slot breakdown in 4-up).
+- **1-up scope monitor** (optional): LiveScopes-style 2×2 grid — picture, vectorscope, RGB waveform, RGB parade. Drag the vertical/horizontal dividers to resize panels (saved in config). Enable in **Preferences** or `"oneUpScopeMonitor": true` in config.
+- **Picture monitoring**: GPU **focus peaking**, **false color**, and **zebra** on all visible feeds. Title-bar controls (**P** / **F** / **Z** / gear) + **⌘⇧P/F/Z** shortcuts; peaking color, sensitivity, and zebra % in **Preferences**.
 - **Inputs UI**: Sheet to assign **ndi:…** / **sdi:…** per slot; network scan button.
 - **Persistence**: **`~/Library/Application Support/Multiviewer/config.json`** (layout + slots + control settings), or **`--config /path/to.json`**.
 - **HTTP companion control**: **`POST`** endpoints bind to **127.0.0.1** on the configured port (default **8080** unless changed in Preferences).
@@ -58,6 +62,9 @@ Example `config.json`:
   "controlEnabled": true,
   "previewMaxFPS": 30,
   "ndiFullQuality": true,
+  "oneUpScopeMonitor": false,
+  "scopeColumnSplit": 0.64,
+  "scopeRowSplit": 0.72,
   "slots": {
     "1": "ndi:MACHINE-HOSTNAME (OBS)",
     "2": "ndi:192.168.1.10:5961",
@@ -72,6 +79,12 @@ Example `config.json`:
 - **`port`**: HTTP companion port.
 - **`previewMaxFPS`** (optional): cap on **ingest/upload** rate per NDI/SDI slot (default **30**). Source FPS is used up to this cap. Also editable in **Preferences**. Clamped **5**–**120**.
 - **`ndiFullQuality`** (optional): when **`false`**, NDI uses SDK low-bandwidth receive. Omit or **`true`** for full source resolution on the wire (default). Feeds are **downscaled to on-screen size** before GPU upload either way.
+- **`oneUpScopeMonitor`** (optional): when **`true`**, **1-up** uses a LiveScopes-style layout: picture and vectorscope on top, RGB waveform and RGB parade below (display-only shading reference). Omit or **`false`** = fullscreen 1-up.
+- **`scopeColumnSplit`** / **`scopeRowSplit`** (optional): left-column width and top-row height in **1-up scope monitor** (roughly **0.30–0.85** and **0.35–0.90**). Defaults **0.64** / **0.72**. Updated when you drag layout dividers.
+- **`focusPeakingEnabled`**, **`falseColorEnabled`**, **`zebraEnabled`** (optional): picture monitoring toggles.
+- **`focusPeakingColor`** (optional): `green`, `red`, `white`, or `yellow`.
+- **`focusPeakingSensitivity`** (optional): edge threshold **0.05–0.35** (default **0.12**).
+- **`zebraLevel`** (optional): over-exposure threshold **0.70–1.00** (default **0.90** = 90%).
 
 The display redraws **on each new frame** (not a blind 60 Hz timer). Restart the app after changing **`previewMaxFPS`** or **`ndiFullQuality`**.
 
@@ -83,23 +96,54 @@ The display redraws **on each new frame** (not a blind 60 Hz timer). Restart t
 | 1-Up layout | **⌘ 1** (View menu) |
 | 4-Up layout | **⌘ 4** |
 | Configure inputs… | **⇧ ⌘ I** ; title-bar **Inputs…** |
+| Toggle focus peaking | **⇧ ⌘ P** (View menu) ; title bar **P** |
+| Toggle false color | **⇧ ⌘ F** ; title bar **F** |
+| Toggle zebra | **⇧ ⌘ Z** ; title bar **Z** |
 
 The main window subtitle shows **`Control: http://127.0.0.1:PORT`** when the server is running.
 
-## NDI runtime setup
+## NDI runtime
 
-MultiViewer by Brekke does **not** ship NDI’s proprietary library; it discovers and `dlopen`s it at launch.
+Release builds made with **`NDI_SDK_DIR`** set (see [`docs/NDI-BUNDLING.md`](docs/NDI-BUNDLING.md)) ship the NDI® runtime inside **`MultiViewer by Brekke.app/Contents/Frameworks/`**. End users do **not** need a separate NDI Tools install for NDI inputs.
 
-1. Prefer installing **NDI Tools / runtime for macOS** from [ndi.video/download](https://ndi.video/download/).
-2. The loader searches typical locations (`/Library/NDI`, NDI-branded `.app` bundles under `/Applications`, Homebrew **`/opt/homebrew/lib`**, some third-party bundles such as **Resolume**, **`NDI_RUNTIME_DIR_V3`** / **`NDI_SDK_DIR`**).
-3. **`HX_Driver`** under `Application Support` is **HX codec helpers**, **not** a replacement for the core **`libndi`** — you still need a full runtime.
+When developing with **`swift run`**, or if the app was built without bundling, the loader falls back to a system **`libndi`**:
 
-Override directory (folder **containing** the dylib):
+1. Optional override: **`NDI_RUNTIME_DIR_V3`** or **`NDI_SDK_DIR`** (folder containing the dylib or SDK root).
+2. Typical installs: **`/Library/NDI`**, NDI-branded `.app` bundles under **`/Applications`**, Homebrew **`/opt/homebrew/lib`**, or third-party apps such as **Resolume**.
+3. **`HX_Driver`** under Application Support is **HX codec helpers**, **not** a replacement for the core **`libndi`**.
+
+Build a release app **with** bundled NDI:
 
 ```bash
-export NDI_RUNTIME_DIR_V3="/path/to/folder"
-swift run MetalMultiviewer
+export NDI_SDK_DIR="/Library/NDI SDK for Apple"   # path to extracted SDK
+./Scripts/build-dmg.sh
 ```
+
+### Distribution (sign + notarize)
+
+For downloads from the web or Messages to open without “damaged” errors, you need an [Apple Developer Program](https://developer.apple.com/programs/) membership and a **Developer ID Application** certificate.
+
+One-time setup:
+
+```bash
+# Xcode → Settings → Accounts → Manage Certificates → Developer ID Application
+xcrun notarytool store-credentials "multiviewer-notary" \
+  --apple-id "you@example.com" \
+  --team-id "YOURTEAMID" \
+  --password "@keychain:AC_PASSWORD"
+```
+
+Release build with notarization:
+
+```bash
+export NDI_SDK_DIR="/Library/NDI SDK for Apple"
+export APPLE_NOTARY_KEYCHAIN_PROFILE="multiviewer-notary"
+NOTARIZE=1 ./Scripts/build-dmg.sh
+```
+
+Distribute `dist/MultiViewer-by-Brekke.dmg`. See [`docs/NDI-BUNDLING.md`](docs/NDI-BUNDLING.md) for signing details.
+
+Learn more about NDI and optional tools at [ndi.video](https://ndi.video/). **NDI® is a registered trademark of Vizrt NDI AB.**
 
 ## Blackmagic DeckLink (SDI)
 
@@ -145,6 +189,20 @@ POST /source/3/sdi%3A0
 
 To **clear** a slot programmatically — not exposed as HTTP in the current codebase; clear it in **Configure Inputs** (set to `(None)`).
 
+### Picture monitoring
+
+| Route | Meaning |
+|-------|---------|
+| `POST /monitoring/peaking/toggle` | Toggle focus peaking |
+| `POST /monitoring/peaking/on` / `off` | Set focus peaking |
+| `POST /monitoring/falsecolor/toggle` | Toggle false color |
+| `POST /monitoring/falsecolor/on` / `off` | Set false color |
+| `POST /monitoring/zebra/toggle` | Toggle zebra |
+| `POST /monitoring/zebra/on` / `off` | Set zebra |
+| `POST /monitoring/zebra/{70,80,90,95,100}` | Set zebra level (%) |
+
+`GET /state` includes a `monitoring` object with current toggle states and `zebraLevel`.
+
 Success: JSON `{"ok":true}`. Errors: `400` with `{"ok":false,"error":"…"}`.
 
 ## Bitfocus Companion setup
@@ -178,9 +236,9 @@ curl -X POST --globoff 'http://127.0.0.1:8080/source/1/ndi:MACHINE%20(Main)'
 - `Sources/MetalMultiviewer/Resources/Shaders.metal` — textured quad shaders.
 - `Tests/MetalMultiviewerTests/` — lightweight config tests.
 
-## License / NDI trademark
+## License / NDI® trademark
 
-Uses **NDI** via the vendor dynamic library installed on your system — comply with Vizrt/NewTek **[NDI license terms](https://ndi.video/)** for redistribution or bundling beyond personal use.
+The NDI® runtime is redistributed in release builds under the [NDI SDK license](https://docs.ndi.video/all/developing-with-ndi/sdk/licensing). **NDI® is a registered trademark of Vizrt NDI AB.** See **MultiViewer by Brekke → Acknowledgments…** in the app and [ndi.video](https://ndi.video/) for more information.
 
 ---
 

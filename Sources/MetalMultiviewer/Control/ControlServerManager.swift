@@ -30,8 +30,13 @@ final class ControlServerManager {
         self.state = state
     }
 
+    private var monitoringStore: PictureMonitoringStore?
+
     /// Applies preference: binds exact port and IPv4 address (predictable URLs for automation).
-    func apply(enabled: Bool, port: in_port_t, bindAddress: String) {
+    func apply(enabled: Bool, port: in_port_t, bindAddress: String, monitoringStore: PictureMonitoringStore? = nil) {
+        if let monitoringStore {
+            self.monitoringStore = monitoringStore
+        }
         lastWarning = nil
 
         if !enabled {
@@ -48,7 +53,7 @@ final class ControlServerManager {
         server = nil
         status = .stopped
 
-        let next = ControlServer(state: state)
+        let next = ControlServer(state: state, monitoringStore: monitoringStore)
         do {
             try next.start(port: port, bindAddress: bindAddress)
             server = next
@@ -65,7 +70,7 @@ final class ControlServerManager {
             }
 
             lastWarning = "Could not bind \(bindAddress):\(port): \(error). Restored \(rollbackBind):\(rollbackPort)."
-            let rb = ControlServer(state: state)
+            let rb = ControlServer(state: state, monitoringStore: monitoringStore)
             do {
                 try rb.start(port: rollbackPort, bindAddress: rollbackBind)
                 server = rb

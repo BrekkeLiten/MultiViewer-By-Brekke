@@ -11,9 +11,14 @@ DMG_PATH="$ROOT/dist/$DMG_NAME"
 
 "$SCRIPT_DIR/build-app.sh" release
 
+APP_PATH="$ROOT/dist/$APP_NAME.app"
+if [[ "${NOTARIZE:-}" == "1" ]]; then
+    "$SCRIPT_DIR/sign-and-notarize.sh" sign "$APP_PATH"
+fi
+
 rm -rf "$STAGING"
 mkdir -p "$STAGING"
-cp -R "$ROOT/dist/$APP_NAME.app" "$STAGING/"
+cp -R "$APP_PATH" "$STAGING/"
 ln -sf /Applications "$STAGING/Applications"
 
 rm -f "$DMG_PATH"
@@ -28,3 +33,7 @@ rm -rf "$STAGING"
 
 echo "Created $DMG_PATH"
 echo "Mount with: open \"$DMG_PATH\""
+
+if [[ "${NOTARIZE:-}" == "1" ]]; then
+    "$SCRIPT_DIR/sign-and-notarize.sh" notarize "$APP_PATH" "$DMG_PATH"
+fi
