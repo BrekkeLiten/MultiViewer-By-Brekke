@@ -2,17 +2,21 @@ import AppKit
 import Metal
 import MetalKit
 
-/// Owns the Metal render loop and source manager; no AppKit UI chrome.
+/// Owns one Metal viewport; optionally shares a `SourceManager` across windows.
 @MainActor
 final class MetalRenderCoordinator {
     let mtkView: MTKView
+    let windowRole: MonitorWindowRole
     private(set) var renderer: MetalRenderer?
     private(set) var sourceManager: SourceManager?
+    private var ownsSourceManager = false
     private var appState: AppState?
     private var reconcileTimer: Timer?
     private var onRefresh: (() -> Void)?
+    private weak var reconcilePeer: MetalRenderCoordinator?
 
-    init() {
+    init(windowRole: MonitorWindowRole = .single) {
+        self.windowRole = windowRole
         let view = MTKView(frame: .zero)
         view.device = MTLCreateSystemDefaultDevice()
         view.colorPixelFormat = .bgra8Unorm
@@ -30,61 +34,90 @@ final class MetalRenderCoordinator {
         oneUpScopeMonitor: Bool,
         scopeMonitorSplit: ScopeMonitorSplit,
         pictureMonitoring: PictureMonitoringSettings,
+        sharedSourceManager: SourceManager? = nil,
+        reconcilePeer: MetalRenderCoordinator? = nil,
         onRefresh: @escaping () -> Void
     ) throws {
         self.onRefresh = onRefresh
+        self.appState = appState
+        self.reconcilePeer = reconcilePeer
 
         guard let device = mtkView.device else {
             throw MetalRenderCoordinatorError.deviceUnavailable
         }
 
         let renderer = try MetalRenderer(device: device, drawablePixelFormat: mtkView.colorPixelFormat)
+        renderer.setWindowRole(windowRole)
         renderer.setOneUpScopeMonitorEnabled(oneUpScopeMonitor)
         renderer.setScopeMonitorSplit(scopeMonitorSplit)
         renderer.setPictureMonitoring(pictureMonitoring)
         self.renderer = renderer
         mtkView.delegate = renderer
 
-        let mtkViewRef = mtkView
-        let onFrameUpdated: @Sendable () -> Void = {
-            Task { @MainActor in
-                mtkViewRef.setNeedsDisplay(mtkViewRef.bounds)
+        if let sharedSourceManager {
+            sourceManager = sharedSourceManager
+            ownsSourceManager = false
+        } else {
+            let mtkViewRef = mtkView
+            let onFrameUpdated: @Sendable () -> Void = {
+                Task { @MainActor in
+                    mtkViewRef.setNeedsDisplay(mtkViewRef.bounds)
+                }
             }
+            sourceManager = SourceManager(
+                device: device,
+                state: appState,
+                playback: playback,
+                onFrameUpdated: onFrameUpdated
+            )
+            ownsSourceManager = true
         }
 
-        let sourceManager = SourceManager(
-            device: device,
-            state: appState,
-            playback: playback,
-            onFrameUpdated: onFrameUpdated
-        )
-        self.sourceManager = sourceManager
+    }
 
+    func attachSharedSourceManager(_ manager: SourceManager, appState: AppState, onRefresh: @escaping () -> Void) {
+        sourceManager = manager
+        ownsSourceManager = false
         self.appState = appState
-        // Capture only weak self: the timer must not keep the source manager,
-        // renderer, or app state alive past the coordinator's lifetime.
-        reconcileTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                guard
-                    let self,
-                    let sourceManager = self.sourceManager,
-                    let renderer = self.renderer,
-                    let appState = self.appState
-                else { return }
-                sourceManager.reconcile(with: renderer)
-                let snap = appState.get()
-                let viewport = self.effectiveDrawablePixelSize()
-                sourceManager.updateDisplayUploadTargets(
-                    viewportWidth: viewport.width,
-                    viewportHeight: viewport.height,
-                    layout: snap.layout,
-                    primarySlot: snap.primarySlot,
-                    oneUpScopeMonitor: self.oneUpScopeMonitorEnabled,
-                    scopeMonitorSplit: self.scopeMonitorSplit
-                )
-                self.onRefresh?()
-            }
-        }
+        self.onRefresh = onRefresh
+    }
+
+    func runReconcileTick(
+        layout: AppState.LayoutMode,
+        primarySlot: Int,
+        oneUpScopeMonitor: Bool,
+        scopeMonitorSplit: ScopeMonitorSplit,
+        gridLayout: GridLayout,
+        gridSplit: GridSplit,
+        dualMonitorMode: Bool,
+        programCoordinator: MetalRenderCoordinator?
+    ) {
+        guard let sourceManager, let appState else { return }
+        var renderers: [MetalRenderer] = []
+        if let r = renderer { renderers.append(r) }
+        if dualMonitorMode, let peer = programCoordinator?.renderer { renderers.append(peer) }
+        sourceManager.reconcile(with: renderers)
+
+        let snap = appState.get()
+        let multiviewViewport = effectiveDrawablePixelSize()
+        let programViewport = programCoordinator?.effectiveDrawablePixelSize()
+
+        let effectiveLayout = dualMonitorMode ? AppState.LayoutMode.fourUp : layout
+        sourceManager.updateDisplayUploadTargets(
+            viewportWidth: multiviewViewport.width,
+            viewportHeight: multiviewViewport.height,
+            layout: effectiveLayout,
+            primarySlot: snap.primarySlot,
+            oneUpScopeMonitor: oneUpScopeMonitor && windowRole != .multiview,
+            scopeMonitorSplit: scopeMonitorSplit,
+            gridLayout: gridLayout,
+            gridSplit: gridSplit,
+            dualMonitorMode: dualMonitorMode,
+            programViewportWidth: programViewport?.width,
+            programViewportHeight: programViewport?.height,
+            programOneUpScopeMonitor: oneUpScopeMonitor
+        )
+        onRefresh?()
     }
 
     isolated deinit {
@@ -114,25 +147,39 @@ final class MetalRenderCoordinator {
     func syncRendererLayout(from snap: AppState.Snapshot) {
         renderer?.setLayoutMode(snap.layout == .oneUp ? .oneUp : .fourUp)
         renderer?.setPrimarySlot(snap.primarySlot)
+        renderer?.setGridLayout(snap.gridLayout)
+        renderer?.setGridSplit(snap.gridSplit)
     }
 
     func pushDisplayUploadTargets(
         layout: AppState.LayoutMode,
         primarySlot: Int,
         oneUpScopeMonitor: Bool,
-        scopeMonitorSplit: ScopeMonitorSplit
+        scopeMonitorSplit: ScopeMonitorSplit,
+        gridLayout: GridLayout,
+        gridSplit: GridSplit,
+        dualMonitorMode: Bool,
+        programCoordinator: MetalRenderCoordinator?
     ) {
         oneUpScopeMonitorEnabled = oneUpScopeMonitor
         self.scopeMonitorSplit = scopeMonitorSplit
         guard let sourceManager else { return }
         let viewport = effectiveDrawablePixelSize()
+        let programViewport = programCoordinator?.effectiveDrawablePixelSize()
+        let effectiveLayout = dualMonitorMode ? AppState.LayoutMode.fourUp : layout
         sourceManager.updateDisplayUploadTargets(
             viewportWidth: viewport.width,
             viewportHeight: viewport.height,
-            layout: layout,
+            layout: effectiveLayout,
             primarySlot: primarySlot,
-            oneUpScopeMonitor: oneUpScopeMonitor,
-            scopeMonitorSplit: scopeMonitorSplit
+            oneUpScopeMonitor: oneUpScopeMonitor && windowRole != .multiview,
+            scopeMonitorSplit: scopeMonitorSplit,
+            gridLayout: gridLayout,
+            gridSplit: gridSplit,
+            dualMonitorMode: dualMonitorMode,
+            programViewportWidth: programViewport?.width,
+            programViewportHeight: programViewport?.height,
+            programOneUpScopeMonitor: oneUpScopeMonitor
         )
     }
 
@@ -141,7 +188,7 @@ final class MetalRenderCoordinator {
         requestDisplay()
     }
 
-    private func effectiveDrawablePixelSize() -> (width: Int, height: Int) {
+    func effectiveDrawablePixelSize() -> (width: Int, height: Int) {
         let scale = mtkView.window?.backingScaleFactor ?? 1
         let dw = mtkView.drawableSize.width
         let dh = mtkView.drawableSize.height
@@ -164,6 +211,29 @@ final class MetalRenderCoordinator {
 
     func feedSignalStatusBySlot(snapshot: AppState.Snapshot) -> [Int: FeedSignalStatus] {
         sourceManager?.feedSignalStatusBySlot(snapshot: snapshot) ?? [:]
+    }
+
+    func startReconcileTimer(
+        model: MonitorAppModel
+    ) {
+        reconcileTimer?.invalidate()
+        reconcileTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self, weak model] _ in
+            Task { @MainActor [weak self, weak model] in
+                guard let self, let model else { return }
+                self.runReconcileTick(
+                    layout: model.layout,
+                    primarySlot: model.primarySlot,
+                    oneUpScopeMonitor: model.oneUpScopeMonitorEnabled,
+                    scopeMonitorSplit: model.scopeMonitorSplit,
+                    gridLayout: model.gridLayout,
+                    gridSplit: model.gridSplit,
+                    dualMonitorMode: model.dualMonitorMode,
+                    programCoordinator: model.programCoordinator
+                )
+                model.programCoordinator?.requestDisplay()
+                self.requestDisplay()
+            }
+        }
     }
 }
 

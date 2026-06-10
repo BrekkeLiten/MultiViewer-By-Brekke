@@ -2,7 +2,7 @@
 
 **Website:** [multiviewer.brek.ke](https://multiviewer.brek.ke) · landing page source in [`website/`](website/)
 
-Native **macOS** app that shows up to **four live video feeds** in a Metal-powered multiview (**1-up** or **4-up**), with a small **HTTP control API** suited for **[Bitfocus Companion](https://bitfocus.io/companion/)** or any system that can send `POST` requests.
+Native **macOS** app that shows up to **sixteen live video feeds** in a Metal-powered configurable multiview grid (columns × rows in **Preferences**), plus optional **1-up** program view and **dual-monitor** mode (grid on one display, program on another), with a small **HTTP control API** suited for **[Bitfocus Companion](https://bitfocus.io/companion/)** or any system that can send `POST` requests.
 
 NDI ingestion uses the vendor **NDI® runtime** (`libndi.dylib` / `libndi.3.dylib`) loaded at runtime. Official **release builds** bundle the SDK runtime inside the app (see [NDI runtime](#ndi-runtime)). **Blackmagic DeckLink SDI** uses the DeckLink APIs from Blackmagic Desktop Video—the app lists devices and captures when drivers are installed.
 
@@ -17,11 +17,11 @@ NDI ingestion uses the vendor **NDI® runtime** (`libndi.dylib` / `libndi.3.dyli
 
 ## Features
 
-- **Layouts**: Full-screen **slot 1** (1-up) or **four quadrants** (4-up).
+- **Layouts**: Full-screen **1-up** or a configurable **columns × rows** grid (up to **16** slots, set in **Preferences**). Drag grid dividers to resize cells when feeds have odd aspect ratios. **Dual monitor mode** shows the grid on one display and 1-up program on another.
 - **NDI receivers**: Sources from **NDI Finder** when possible; bonjour **`_ndi._tcp`** as fallback; **`ndi:IPv4:port`** for direct IP connect.
 - **Aspect ratio**: Incoming **NDI/SDI** frames are letterboxed/pillarboxed to match **broadcast display aspect** (NDI `picture_aspect_ratio`, or pixel size when unset).
 - **On-screen HUD**: Upper-right label shows **NDI · WxH / SDI · WxH** (and slot breakdown in 4-up).
-- **1-up scope monitor** (optional): LiveScopes-style 2×2 grid — picture, vectorscope, RGB waveform, RGB parade. Drag the vertical/horizontal dividers to resize panels (saved in config). Enable in **Preferences** or `"oneUpScopeMonitor": true` in config.
+- **1-up scope monitor** (optional): LiveScopes-style 2×2 grid — picture, vectorscope, RGB waveform, RGB parade. Scopes clear when the feed drops. Drag the vertical/horizontal dividers to resize panels (saved in config). Enable in **Preferences** or `"oneUpScopeMonitor": true` in config.
 - **Picture monitoring**: GPU **focus peaking**, **false color**, and **zebra** on all visible feeds. Title-bar controls (**P** / **F** / **Z** / gear) + **⌘⇧P/F/Z** shortcuts; peaking color, sensitivity, and zebra % in **Preferences**.
 - **Inputs UI**: Sheet to assign **ndi:…** / **sdi:…** per slot; network scan button.
 - **Persistence**: **`~/Library/Application Support/Multiviewer/config.json`** (layout + slots + control settings), or **`--config /path/to.json`**.
@@ -58,6 +58,9 @@ Example `config.json`:
 ```json
 {
   "layout": 4,
+  "gridColumns": 3,
+  "gridRows": 2,
+  "dualMonitorMode": false,
   "port": 8080,
   "controlEnabled": true,
   "previewMaxFPS": 30,
@@ -73,8 +76,11 @@ Example `config.json`:
 }
 ```
 
-- **`layout`**: `1` = one-up, `4` = four-up.
-- **`slots`**: keys `"1"`…`"4"`, values `ndi:…` or `sdi:n`.
+- **`layout`**: `1` = one-up, `4` = multiview grid (uses `gridColumns` / `gridRows`).
+- **`gridColumns`** / **`gridRows`** (optional): multiview grid size; `columns × rows ≤ 16`. Omit ⇒ **2×2**.
+- **`gridColumnSplits`** / **`gridRowSplits`** (optional): draggable divider positions (arrays of fractions).
+- **`dualMonitorMode`** (optional): when **`true`**, grid and program run in separate windows.
+- **`slots`**: keys `"1"`…`"16"`, values `ndi:…` or `sdi:n`.
 - **`controlEnabled`**: omit or `true` to run HTTP control; `false` to disable.
 - **`port`**: HTTP companion port.
 - **`previewMaxFPS`** (optional): cap on **ingest/upload** rate per NDI/SDI slot (default **30**). Source FPS is used up to this cap. Also editable in **Preferences**. Clamped **5**–**120**.
@@ -94,7 +100,8 @@ The display redraws **on each new frame** (not a blind 60 Hz timer). Restart t
 |--------|---------------------|
 | Preferences | **⌘ ,** |
 | 1-Up layout | **⌘ 1** (View menu) |
-| 4-Up layout | **⌘ 4** |
+| Multiview layout | **⌘ 4** |
+| Open program monitor | **View** menu (dual monitor mode) |
 | Configure inputs… | **⇧ ⌘ I** ; title-bar **Inputs…** |
 | Toggle focus peaking | **⇧ ⌘ P** (View menu) ; title bar **P** |
 | Toggle false color | **⇧ ⌘ F** ; title bar **F** |
@@ -166,9 +173,13 @@ All routes below use **`POST`** (body ignored).
 | Route | Meaning |
 |-------|---------|
 | `POST /layout/1` | Switch to **1-up** |
-| `POST /layout/4` | Switch to **4-up** |
+| `POST /layout/4` | Switch to **2×2** multiview (backward compatible) |
+| `POST /layout/grid/{cols}/{rows}` | Set grid size (`cols × rows ≤ 16`) |
+| `POST /layout/primary/{slot}` | **1-up** / program monitor slot (`1…16`) |
 
-### Source per slot (`1…4`)
+`GET /state` returns `layout`, `primarySlot`, `gridColumns`, `gridRows`, `dualMonitorMode`, and `monitoring`.
+
+### Source per slot (`1…16`)
 
 | Route pattern | Meaning |
 |---------------|---------|

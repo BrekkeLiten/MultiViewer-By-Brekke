@@ -22,10 +22,20 @@ final class AppState: @unchecked Sendable {
         var layout: LayoutMode
         var slots: [Int: SourceRef]
         var primarySlot: Int
+        var gridLayout: GridLayout
+        var gridSplit: GridSplit
+        var dualMonitorMode: Bool
     }
 
     private let queue = DispatchQueue(label: "MetalMultiviewer.AppState")
-    private var snapshot = Snapshot(layout: .fourUp, slots: [:], primarySlot: 1)
+    private var snapshot = Snapshot(
+        layout: .fourUp,
+        slots: [:],
+        primarySlot: 1,
+        gridLayout: .default2x2,
+        gridSplit: .equal(columns: 2, rows: 2),
+        dualMonitorMode: false
+    )
 
     func get() -> Snapshot {
         queue.sync { snapshot }
@@ -35,14 +45,29 @@ final class AppState: @unchecked Sendable {
         queue.sync { snapshot.layout = mode }
     }
 
-    /// Slot shown fullscreen in **1-up** (`1 ... 4`); clamps if out of range.
+    func setGridLayout(_ grid: GridLayout) {
+        queue.sync {
+            snapshot.gridLayout = grid
+            snapshot.gridSplit = snapshot.gridSplit.resized(for: grid)
+        }
+    }
+
+    func setGridSplit(_ split: GridSplit) {
+        queue.sync { snapshot.gridSplit = split }
+    }
+
+    func setDualMonitorMode(_ enabled: Bool) {
+        queue.sync { snapshot.dualMonitorMode = enabled }
+    }
+
+    /// Slot shown fullscreen in **1-up** (`1 ... maxSlots`); clamps if out of range.
     func setPrimarySlot(_ slot: Int) {
-        let clamped = min(max(slot, 1), 4)
+        let clamped = min(max(slot, 1), MultiviewLimits.maxSlots)
         queue.sync { snapshot.primarySlot = clamped }
     }
 
     func setSource(slot: Int, source: SourceRef?) throws {
-        guard (1...4).contains(slot) else {
+        guard (1 ... MultiviewLimits.maxSlots).contains(slot) else {
             throw AppStateError.invalidSlot
         }
         queue.sync {
@@ -57,5 +82,5 @@ final class AppState: @unchecked Sendable {
 
 enum AppStateError: Error {
     case invalidSlot
+    case invalidGrid
 }
-

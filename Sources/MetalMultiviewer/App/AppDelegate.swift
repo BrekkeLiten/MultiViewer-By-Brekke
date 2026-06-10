@@ -23,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        true
+        guard let model else { return true }
+        if model.dualMonitorMode {
+            return false
+        }
+        return true
     }
 }

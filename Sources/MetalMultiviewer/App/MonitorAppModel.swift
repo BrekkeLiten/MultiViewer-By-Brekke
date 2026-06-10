@@ -8,15 +8,20 @@ final class MonitorAppModel {
     let settingsStore: SettingsStore
     let monitoringStore: PictureMonitoringStore
     let controlServerManager: ControlServerManager
-    let metalCoordinator = MetalRenderCoordinator()
+    let metalCoordinator: MetalRenderCoordinator
+    private(set) var programCoordinator: MetalRenderCoordinator?
 
     var layout: AppState.LayoutMode
     var primarySlot: Int
+    var gridLayout: GridLayout
+    var gridSplit: GridSplit
+    var dualMonitorMode: Bool
     var oneUpScopeMonitorEnabled: Bool
     var scopeMonitorSplit: ScopeMonitorSplit
     var pictureMonitoring: PictureMonitoringSettings
     var showSourcesEditor = false
     var scrollPreferencesToPictureMonitoring = false
+    var programMonitorOpen = false
 
     var feedDimensions: [Int: (width: Int, height: Int)] = [:]
     var signalStatus: [Int: FeedSignalStatus] = [:]
@@ -32,6 +37,7 @@ final class MonitorAppModel {
         let monitoring = PictureMonitoringStore(
             settings: ConfigLoader.effectivePictureMonitoring(config: cfg)
         )
+        let grid = ConfigLoader.effectiveGridLayout(config: cfg)
 
         self.settingsStore = store
         self.workingConfig = cfg
@@ -40,13 +46,20 @@ final class MonitorAppModel {
         self.controlServerManager = ControlServerManager(state: state)
         self.activePlayback = MonitorPlayback.from(config: cfg)
         self.layout = ConfigLoader.defaultLayout(config: cfg)
-        self.primarySlot = cfg.primarySlot.flatMap { (1 ... 4).contains($0) ? $0 : nil } ?? 1
+        self.primarySlot = cfg.primarySlot.flatMap { (1 ... MultiviewLimits.maxSlots).contains($0) ? $0 : nil } ?? 1
+        self.gridLayout = grid
+        self.gridSplit = ConfigLoader.effectiveGridSplit(config: cfg, grid: grid)
+        self.dualMonitorMode = ConfigLoader.effectiveDualMonitorMode(config: cfg)
         self.oneUpScopeMonitorEnabled = ConfigLoader.effectiveOneUpScopeMonitor(config: cfg)
         self.scopeMonitorSplit = ConfigLoader.effectiveScopeMonitorSplit(config: cfg)
         self.pictureMonitoring = monitoring.get()
+        self.metalCoordinator = MetalRenderCoordinator(windowRole: .single)
 
         appState.setLayout(layout)
         appState.setPrimarySlot(primarySlot)
+        appState.setGridLayout(gridLayout)
+        appState.setGridSplit(gridSplit)
+        appState.setDualMonitorMode(dualMonitorMode)
         loadSlotsFromConfig(cfg, into: state)
     }
 
@@ -89,25 +102,73 @@ final class MonitorAppModel {
                     }
                 }
             )
+            metalCoordinator.renderer?.setWindowRole(dualMonitorMode ? .multiview : .single)
+            if dualMonitorMode {
+                try openProgramMonitor()
+            }
             metalCoordinator.syncRendererLayout(from: appState.get())
-            metalCoordinator.pushDisplayUploadTargets(
-                layout: layout,
-                primarySlot: primarySlot,
-                oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-                scopeMonitorSplit: scopeMonitorSplit
-            )
+            pushUploadTargets()
             refreshOverlayData()
+            metalCoordinator.startReconcileTimer(model: self)
         } catch {
             presentFatalRendererError(error)
         }
     }
 
+    func openProgramMonitor() throws {
+        guard programCoordinator == nil else { return }
+        guard let sourceManager = metalCoordinator.sourceManager else {
+            throw MetalRenderCoordinatorError.deviceUnavailable
+        }
+        let coordinator = MetalRenderCoordinator(windowRole: .program)
+        try coordinator.start(
+            appState: appState,
+            playback: activePlayback,
+            oneUpScopeMonitor: oneUpScopeMonitorEnabled,
+            scopeMonitorSplit: scopeMonitorSplit,
+            pictureMonitoring: pictureMonitoring,
+            sharedSourceManager: sourceManager,
+            reconcilePeer: metalCoordinator,
+            onRefresh: { [weak self] in
+                Task { @MainActor in
+                    self?.refreshOverlayData()
+                }
+            }
+        )
+        programCoordinator = coordinator
+        programMonitorOpen = true
+        coordinator.syncRendererLayout(from: appState.get())
+        coordinator.requestDisplay()
+    }
+
+    func closeProgramMonitor() {
+        programCoordinator = nil
+        programMonitorOpen = false
+    }
+
+    func setDualMonitorMode(_ enabled: Bool) throws {
+        dualMonitorMode = enabled
+        appState.setDualMonitorMode(enabled)
+        metalCoordinator.renderer?.setWindowRole(enabled ? .multiview : .single)
+        if enabled {
+            try openProgramMonitor()
+        } else {
+            closeProgramMonitor()
+            metalCoordinator.renderer?.setWindowRole(.single)
+        }
+        persistDualMonitorMode(enabled)
+        pushUploadTargets()
+        metalCoordinator.requestDisplay()
+        programCoordinator?.requestDisplay()
+    }
+
     func refreshOverlayData() {
-        // Runs at 20 Hz from the reconcile timer — only write @Observable
-        // properties when values actually changed to avoid SwiftUI churn.
         let snap = appState.get()
         if layout != snap.layout { layout = snap.layout }
         if primarySlot != snap.primarySlot { primarySlot = snap.primarySlot }
+        if gridLayout != snap.gridLayout { gridLayout = snap.gridLayout }
+        if gridSplit != snap.gridSplit { gridSplit = snap.gridSplit }
+        if dualMonitorMode != snap.dualMonitorMode { dualMonitorMode = snap.dualMonitorMode }
         let dims = metalCoordinator.feedDimensionsBySlot()
         if !Self.dimensionsEqual(feedDimensions, dims) { feedDimensions = dims }
         let status = metalCoordinator.feedSignalStatusBySlot(snapshot: snap)
@@ -126,32 +187,58 @@ final class MonitorAppModel {
     }
 
     func setLayout(_ mode: AppState.LayoutMode) {
+        guard !dualMonitorMode else { return }
         appState.setLayout(mode)
         layout = mode
         metalCoordinator.syncRendererLayout(from: appState.get())
-        metalCoordinator.pushDisplayUploadTargets(
-            layout: layout,
-            primarySlot: primarySlot,
-            oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-            scopeMonitorSplit: scopeMonitorSplit
-        )
+        pushUploadTargets()
         refreshOverlayData()
         persistAppStateToDisk()
         metalCoordinator.requestDisplay()
     }
 
+    func setGridLayout(_ grid: GridLayout) {
+        gridLayout = grid
+        gridSplit = gridSplit.resized(for: grid)
+        appState.setGridLayout(grid)
+        appState.setGridSplit(gridSplit)
+        if !dualMonitorMode {
+            appState.setLayout(.fourUp)
+            layout = .fourUp
+        }
+        metalCoordinator.syncRendererLayout(from: appState.get())
+        pushUploadTargets()
+        refreshOverlayData()
+        persistGridSettings()
+        metalCoordinator.requestDisplay()
+    }
+
+    func applyGridSplit(_ split: GridSplit, persist: Bool) {
+        gridSplit = split
+        appState.setGridSplit(split)
+        metalCoordinator.syncRendererLayout(from: appState.get())
+        pushUploadTargets()
+        refreshOverlayData()
+        metalCoordinator.requestDisplay()
+        if persist {
+            persistGridSplit(split)
+        }
+    }
+
     func switchToOneUp(primarySlot slot: Int) {
         appState.setPrimarySlot(slot)
-        appState.setLayout(.oneUp)
         primarySlot = slot
+        if dualMonitorMode {
+            programCoordinator?.syncRendererLayout(from: appState.get())
+            programCoordinator?.requestDisplay()
+            persistAppStateToDisk()
+            refreshOverlayData()
+            return
+        }
+        appState.setLayout(.oneUp)
         layout = .oneUp
         metalCoordinator.syncRendererLayout(from: appState.get())
-        metalCoordinator.pushDisplayUploadTargets(
-            layout: layout,
-            primarySlot: primarySlot,
-            oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-            scopeMonitorSplit: scopeMonitorSplit
-        )
+        pushUploadTargets()
         refreshOverlayData()
         persistAppStateToDisk()
         metalCoordinator.requestDisplay()
@@ -160,14 +247,11 @@ final class MonitorAppModel {
     func applyScopeMonitorSplit(_ split: ScopeMonitorSplit, persist: Bool) {
         scopeMonitorSplit = split
         metalCoordinator.setScopeMonitorSplit(split)
-        metalCoordinator.pushDisplayUploadTargets(
-            layout: layout,
-            primarySlot: primarySlot,
-            oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-            scopeMonitorSplit: scopeMonitorSplit
-        )
+        programCoordinator?.setScopeMonitorSplit(split)
+        pushUploadTargets()
         refreshOverlayData()
         metalCoordinator.requestDisplay()
+        programCoordinator?.requestDisplay()
         if persist {
             persistScopeMonitorSplit(split)
         }
@@ -176,20 +260,18 @@ final class MonitorAppModel {
     func applyOneUpScopeMonitor(_ enabled: Bool) {
         oneUpScopeMonitorEnabled = enabled
         metalCoordinator.setOneUpScopeMonitorEnabled(enabled)
-        metalCoordinator.pushDisplayUploadTargets(
-            layout: layout,
-            primarySlot: primarySlot,
-            oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-            scopeMonitorSplit: scopeMonitorSplit
-        )
+        programCoordinator?.setOneUpScopeMonitorEnabled(enabled)
+        pushUploadTargets()
         refreshOverlayData()
         metalCoordinator.requestDisplay()
+        programCoordinator?.requestDisplay()
     }
 
     func applyPictureMonitoring(_ settings: PictureMonitoringSettings, persist: Bool) {
         pictureMonitoring = settings.clamped()
         monitoringStore.set(pictureMonitoring, notify: false)
         metalCoordinator.setPictureMonitoring(pictureMonitoring)
+        programCoordinator?.setPictureMonitoring(pictureMonitoring)
         if persist {
             persistPictureMonitoring(pictureMonitoring)
         }
@@ -217,15 +299,28 @@ final class MonitorAppModel {
         let snap = appState.get()
         layout = snap.layout
         primarySlot = snap.primarySlot
+        gridLayout = snap.gridLayout
+        gridSplit = snap.gridSplit
+        dualMonitorMode = snap.dualMonitorMode
         refreshOverlayData()
         metalCoordinator.syncRendererLayout(from: snap)
+        programCoordinator?.syncRendererLayout(from: snap)
+        pushUploadTargets()
+        metalCoordinator.requestDisplay()
+        programCoordinator?.requestDisplay()
+    }
+
+    private func pushUploadTargets() {
         metalCoordinator.pushDisplayUploadTargets(
             layout: layout,
             primarySlot: primarySlot,
             oneUpScopeMonitor: oneUpScopeMonitorEnabled,
-            scopeMonitorSplit: scopeMonitorSplit
+            scopeMonitorSplit: scopeMonitorSplit,
+            gridLayout: gridLayout,
+            gridSplit: gridSplit,
+            dualMonitorMode: dualMonitorMode,
+            programCoordinator: programCoordinator
         )
-        metalCoordinator.requestDisplay()
     }
 
     func persistAppStateToDisk() {
@@ -234,6 +329,11 @@ final class MonitorAppModel {
             let snap = appState.get()
             cfg.layout = snap.layout.rawValue
             cfg.primarySlot = snap.primarySlot
+            cfg.gridColumns = snap.gridLayout.columns
+            cfg.gridRows = snap.gridLayout.rows
+            cfg.gridColumnSplits = snap.gridSplit.columnFractions.isEmpty ? nil : snap.gridSplit.columnFractions
+            cfg.gridRowSplits = snap.gridSplit.rowFractions.isEmpty ? nil : snap.gridSplit.rowFractions
+            cfg.dualMonitorMode = snap.dualMonitorMode
             var slots: [String: String] = [:]
             for (k, ref) in snap.slots.sorted(by: { $0.key < $1.key }) {
                 slots["\(k)"] = ref.persistenceString
@@ -248,6 +348,37 @@ final class MonitorAppModel {
         }
     }
 
+    func persistGridSettings() {
+        do {
+            var cfg = (try? settingsStore.load()) ?? .empty
+            cfg.gridColumns = gridLayout.columns
+            cfg.gridRows = gridLayout.rows
+            cfg.gridColumnSplits = gridSplit.columnFractions.isEmpty ? nil : gridSplit.columnFractions
+            cfg.gridRowSplits = gridSplit.rowFractions.isEmpty ? nil : gridSplit.rowFractions
+            workingConfig = cfg
+            try settingsStore.save(cfg)
+        } catch {}
+    }
+
+    func persistGridSplit(_ split: GridSplit) {
+        do {
+            var cfg = (try? settingsStore.load()) ?? .empty
+            cfg.gridColumnSplits = split.columnFractions.isEmpty ? nil : split.columnFractions
+            cfg.gridRowSplits = split.rowFractions.isEmpty ? nil : split.rowFractions
+            workingConfig = cfg
+            try settingsStore.save(cfg)
+        } catch {}
+    }
+
+    func persistDualMonitorMode(_ enabled: Bool) {
+        do {
+            var cfg = (try? settingsStore.load()) ?? .empty
+            cfg.dualMonitorMode = enabled
+            workingConfig = cfg
+            try settingsStore.save(cfg)
+        } catch {}
+    }
+
     func persistScopeMonitorSplit(_ split: ScopeMonitorSplit) {
         do {
             var cfg = (try? settingsStore.load()) ?? .empty
@@ -255,9 +386,7 @@ final class MonitorAppModel {
             cfg.scopeRowSplit = split.rowFraction
             workingConfig = cfg
             try settingsStore.save(cfg)
-        } catch {
-            // Best-effort persistence.
-        }
+        } catch {}
     }
 
     func persistPictureMonitoring(_ settings: PictureMonitoringSettings) {
@@ -272,13 +401,13 @@ final class MonitorAppModel {
             cfg.zebraLevel = clamped.zebraLevel
             workingConfig = cfg
             try settingsStore.save(cfg)
-        } catch {
-            // Best-effort persistence.
-        }
+        } catch {}
     }
 
     func reloadWorkingConfig() {
         workingConfig = (try? settingsStore.load()) ?? .empty
+        gridLayout = ConfigLoader.effectiveGridLayout(config: workingConfig)
+        gridSplit = ConfigLoader.effectiveGridSplit(config: workingConfig, grid: gridLayout)
     }
 
     func commitSourcesEditor() {

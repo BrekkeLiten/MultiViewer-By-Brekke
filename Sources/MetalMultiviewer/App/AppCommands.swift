@@ -14,10 +14,17 @@ struct AppCommands: Commands {
             }
             .keyboardShortcut("1")
 
-            Button("4-Up Layout") {
+            Button("Multiview Layout") {
                 model.setLayout(.fourUp)
             }
             .keyboardShortcut("4")
+
+            Divider()
+
+            Button("Open Program Monitor") {
+                try? model.openProgramMonitor()
+            }
+            .disabled(model.programCoordinator != nil)
 
             Divider()
 

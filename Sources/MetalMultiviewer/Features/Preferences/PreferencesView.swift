@@ -12,6 +12,9 @@ struct PreferencesView: View {
     @State private var fpsText = "30"
     @State private var controlURL = ""
     @State private var statusObserver: NSObjectProtocol?
+    @State private var gridColumnsText = "2"
+    @State private var gridRowsText = "2"
+    @State private var gridValidationMessage = ""
 
     private let pictureMonitoringSectionID = "pictureMonitoring"
 
@@ -54,6 +57,49 @@ struct PreferencesView: View {
                             .font(.caption)
                             .foregroundStyle(controlStatusColor)
                     }
+                }
+
+                Section {
+                    LabeledContent("Columns") {
+                        TextField("", text: $gridColumnsText)
+                            .frame(width: 48)
+                            .onSubmit { applyGridFromFields() }
+                    }
+
+                    LabeledContent("Rows") {
+                        TextField("", text: $gridRowsText)
+                            .frame(width: 48)
+                            .onSubmit { applyGridFromFields() }
+                    }
+
+                    LabeledContent("Active slots") {
+                        Text("\(activeGridSlotCount)")
+                            .foregroundStyle(activeGridSlotCount > 0 ? Color.primary : Color.secondary)
+                    }
+
+                    if !gridValidationMessage.isEmpty {
+                        Text(gridValidationMessage)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    HStack {
+                        gridPresetButton("2×2", columns: 2, rows: 2)
+                        gridPresetButton("3×2", columns: 3, rows: 2)
+                        gridPresetButton("4×4", columns: 4, rows: 4)
+                        gridPresetButton("8×2", columns: 8, rows: 2)
+                    }
+
+                    Toggle("Dual monitor mode", isOn: dualMonitorBinding)
+                        .help("Show multiview grid on one display and 1-up program on another.")
+
+                    if model.dualMonitorMode {
+                        Text("Use View → Open Program Monitor or the toolbar button to show the program window.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Multiview grid")
                 }
 
                 Section {
@@ -205,6 +251,56 @@ struct PreferencesView: View {
         )
     }
 
+    private var activeGridSlotCount: Int {
+        guard let cols = Int(gridColumnsText), let rows = Int(gridRowsText),
+              GridLayout.isValid(columns: cols, rows: rows)
+        else { return 0 }
+        return min(cols * rows, MultiviewLimits.maxSlots)
+    }
+
+    private var dualMonitorBinding: Binding<Bool> {
+        Binding(
+            get: { ConfigLoader.effectiveDualMonitorMode(config: working) },
+            set: { enabled in
+                working.dualMonitorMode = enabled
+                saveWorkingConfig()
+                do {
+                    try model.setDualMonitorMode(enabled)
+                } catch {
+                    setStatus("Could not enable dual monitor: \(error)", color: .red)
+                }
+            }
+        )
+    }
+
+    private func gridPresetButton(_ label: String, columns: Int, rows: Int) -> some View {
+        Button(label) {
+            gridColumnsText = "\(columns)"
+            gridRowsText = "\(rows)"
+            applyGridFromFields()
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private func applyGridFromFields() {
+        guard let cols = Int(gridColumnsText.trimmingCharacters(in: .whitespaces)),
+              let rows = Int(gridRowsText.trimmingCharacters(in: .whitespaces))
+        else {
+            gridValidationMessage = "Columns and rows must be numbers."
+            return
+        }
+        guard GridLayout.isValid(columns: cols, rows: rows) else {
+            gridValidationMessage = "Grid must be 1–16 per side with columns × rows ≤ \(MultiviewLimits.maxSlots)."
+            return
+        }
+        gridValidationMessage = ""
+        working.gridColumns = cols
+        working.gridRows = rows
+        saveWorkingConfig()
+        model.setGridLayout(GridLayout(columns: cols, rows: rows))
+    }
+
     private var scopeMonitorBinding: Binding<Bool> {
         Binding(
             get: { ConfigLoader.effectiveOneUpScopeMonitor(config: working) },
@@ -254,6 +350,10 @@ struct PreferencesView: View {
     private func reloadFromDisk() {
         model.reloadWorkingConfig()
         working = model.workingConfig
+        let grid = ConfigLoader.effectiveGridLayout(config: working)
+        gridColumnsText = "\(grid.columns)"
+        gridRowsText = "\(grid.rows)"
+        gridValidationMessage = ""
         portText = "\(Int(ConfigLoader.persistedPreferredPort(config: working)))"
         let fps = working.previewMaxFPS ?? 30
         fpsText = "\(Int(fps.rounded()))"

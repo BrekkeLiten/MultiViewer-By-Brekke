@@ -17,6 +17,11 @@ struct MultiViewerApp: App {
             AppCommands(model: model)
         }
 
+        WindowGroup(id: "program") {
+            ProgramMonitorView(model: model)
+        }
+        .defaultSize(width: 1280, height: 720)
+
         Settings {
             PreferencesView(model: model)
         }

@@ -41,8 +41,8 @@ struct SourcesEditorView: View {
                     }
                 }
 
-                Section("Multiview slots") {
-                    ForEach(1 ... 4, id: \.self) { slot in
+                Section("Multiview slots (\(model.gridLayout.columns)×\(model.gridLayout.rows))") {
+                    ForEach(1 ... model.gridLayout.slotCount, id: \.self) { slot in
                         LabeledContent("Slot \(slot)") {
                             Picker("Slot \(slot)", selection: slotBinding(slot)) {
                                 ForEach(choices) { choice in
@@ -87,7 +87,7 @@ struct SourcesEditorView: View {
 
     private func loadInitialSelections() {
         let snap = model.appState.get()
-        for slot in 1 ... 4 {
+        for slot in 1 ... MultiviewLimits.maxSlots {
             if let src = snap.slots[slot] {
                 let label = SourcesDiscoveryService.displayLabel(for: src.persistenceString)
                 slotSelections[slot] = label
@@ -116,7 +116,7 @@ struct SourcesEditorView: View {
         choices = SourcesDiscoveryService.choiceList(ndiLines: discoveredNDI)
         refByDisplayLabel = Dictionary(uniqueKeysWithValues: choices.map { ($0.label, $0.ref) })
 
-        for slot in 1 ... 4 {
+        for slot in 1 ... MultiviewLimits.maxSlots {
             let display = slotSelections[slot] ?? SourcesDiscoveryService.noneDisplayLabel
             let ref = SourcesDiscoveryService.resolvedPersistenceRef(
                 displayValue: display,
@@ -142,7 +142,7 @@ struct SourcesEditorView: View {
     }
 
     private func commit() {
-        for slot in 1 ... 4 {
+        for slot in 1 ... model.gridLayout.slotCount {
             let display = slotSelections[slot] ?? SourcesDiscoveryService.noneDisplayLabel
             let ref = SourcesDiscoveryService.resolvedPersistenceRef(
                 displayValue: display,

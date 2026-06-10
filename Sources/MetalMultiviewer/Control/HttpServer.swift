@@ -27,6 +27,9 @@ final class ControlServer {
             var body: [String: Any] = [
                 "layout": snap.layout.rawValue,
                 "primarySlot": snap.primarySlot,
+                "gridColumns": snap.gridLayout.columns,
+                "gridRows": snap.gridLayout.rows,
+                "dualMonitorMode": snap.dualMonitorMode,
             ]
             if let store = monitoringStore {
                 let m = store.get()
@@ -48,17 +51,35 @@ final class ControlServer {
 
         server.POST["/layout/4"] = { [weak self] _ in
             self?.state.setLayout(.fourUp)
+            self?.state.setGridLayout(.default2x2)
             Self.notifyAppStateChanged()
             return .ok(.json(["ok": true]))
         }
 
-        /// Which input (1…4) is shown fullscreen in **1-up** mode.
+        server.POST["/layout/grid/:cols/:rows"] = { [weak self] request in
+            guard let self else { return .internalServerError }
+            guard
+                let colsStr = request.params[":cols"],
+                let rowsStr = request.params[":rows"],
+                let cols = Int(colsStr),
+                let rows = Int(rowsStr),
+                GridLayout.isValid(columns: cols, rows: rows)
+            else {
+                return .badRequest(.json(["ok": false, "error": "invalid_grid"]))
+            }
+            state.setGridLayout(GridLayout(columns: cols, rows: rows))
+            state.setLayout(.fourUp)
+            Self.notifyAppStateChanged()
+            return .ok(.json(["ok": true, "gridColumns": cols, "gridRows": rows]))
+        }
+
+        /// Which input (1…16) is shown fullscreen in **1-up** / program monitor mode.
         server.POST["/layout/primary/:slot"] = { [weak self] request in
             guard let self else { return .internalServerError }
             guard
                 let slotStr = request.params[":slot"],
                 let slot = Int(slotStr),
-                (1 ... 4).contains(slot)
+                (1 ... MultiviewLimits.maxSlots).contains(slot)
             else {
                 return .badRequest(.json(["ok": false, "error": "invalid_slot"]))
             }
@@ -73,7 +94,7 @@ final class ControlServer {
             guard
                 let slotStr = request.params[":slot"],
                 let slot = Int(slotStr),
-                (1 ... 4).contains(slot)
+                (1 ... MultiviewLimits.maxSlots).contains(slot)
             else {
                 return .badRequest(.json(["ok": false, "error": "invalid_slot"]))
             }

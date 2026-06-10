@@ -3,24 +3,49 @@ import SwiftUI
 struct FeedBadgeOverlay: View {
     let model: MonitorAppModel
     let size: CGSize
+    let windowRole: MonitorWindowRole
 
     var body: some View {
         let snap = model.appState.get()
-        let showScope = model.oneUpScopeMonitorEnabled && model.layout == .oneUp
+        let showsOneUp = effectiveShowsOneUp
 
         ZStack(alignment: .topLeading) {
-            if model.layout == .oneUp {
+            if showsOneUp {
                 let slot = snap.primarySlot
-                badge(for: slot, snap: snap, origin: previewBadgeOrigin(showScope: showScope), maxWidth: previewBadgeMaxWidth(showScope: showScope))
+                badge(
+                    for: slot,
+                    snap: snap,
+                    origin: previewBadgeOrigin(showScope: model.oneUpScopeMonitorEnabled && showsOneUp),
+                    maxWidth: previewBadgeMaxWidth(showScope: model.oneUpScopeMonitorEnabled && showsOneUp)
+                )
             } else {
-                ForEach(1 ... 4, id: \.self) { slot in
-                    let frame = MultiviewSlotLayout.quadrantFrame(slot: slot, in: size)
-                    badge(for: slot, snap: snap, origin: CGPoint(x: frame.minX + 10, y: frame.minY + 10), maxWidth: badgeMaxWidth(for: slot, frame: frame))
+                ForEach(1 ... model.gridLayout.slotCount, id: \.self) { slot in
+                    let frame = MultiviewSlotLayout.cellFrame(
+                        slot: slot,
+                        columns: model.gridLayout.columns,
+                        rows: model.gridLayout.rows,
+                        split: model.gridSplit,
+                        in: size
+                    )
+                    badge(
+                        for: slot,
+                        snap: snap,
+                        origin: CGPoint(x: frame.minX + 10, y: frame.minY + 10),
+                        maxWidth: max(frame.width - 20, 60)
+                    )
                 }
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(false)
+    }
+
+    private var effectiveShowsOneUp: Bool {
+        switch windowRole {
+        case .program: return true
+        case .multiview: return false
+        case .single: return model.layout == .oneUp
+        }
     }
 
     private func previewBadgeOrigin(showScope: Bool) -> CGPoint {
@@ -36,15 +61,6 @@ struct FeedBadgeOverlay: View {
             return 280
         }
         return min(size.width - 20, 400)
-    }
-
-    private func badgeMaxWidth(for slot: Int, frame: CGRect) -> CGFloat {
-        switch slot {
-        case 1, 3:
-            return max(size.width * 0.5 - 18, 60)
-        default:
-            return max(frame.width - 20, 60)
-        }
     }
 
     @ViewBuilder

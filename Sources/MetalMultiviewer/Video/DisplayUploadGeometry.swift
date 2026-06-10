@@ -5,7 +5,7 @@ enum DisplayUploadGeometry {
     enum Layout {
         case oneUp(primarySlot: Int)
         case oneUpScopeMonitor(primarySlot: Int, split: ScopeMonitorSplit)
-        case fourUp
+        case grid(columns: Int, rows: Int, split: GridSplit)
     }
 
     /// Pixel size of the layout cell for `slot` (before aspect-fit of content).
@@ -25,9 +25,18 @@ enum DisplayUploadGeometry {
             guard slot == primary else { return (0, 0) }
             return (max(Int(Float(vw) * split.columnFraction), 1),
                     max(Int(Float(vh) * split.rowFraction), 1))
-        case .fourUp:
-            guard (1 ... 4).contains(slot) else { return (0, 0) }
-            return (max(vw / 2, 1), max(vh / 2, 1))
+        case let .grid(columns, rows, split):
+            let grid = GridLayout(columns: columns, rows: rows)
+            guard slot >= 1, slot <= grid.slotCount else { return (0, 0) }
+            let size = CGSize(width: CGFloat(vw), height: CGFloat(vh))
+            let frame = MultiviewSlotLayout.cellFrame(
+                slot: slot,
+                columns: columns,
+                rows: rows,
+                split: split,
+                in: size
+            )
+            return (max(Int(frame.width.rounded()), 1), max(Int(frame.height.rounded()), 1))
         }
     }
 

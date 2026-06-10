@@ -27,10 +27,10 @@ final class SourceManager: @unchecked Sendable {
         self.onFrameUpdated = onFrameUpdated
     }
 
-    func reconcile(with renderer: MetalRenderer) {
+    func reconcile(with renderers: [MetalRenderer]) {
         let snap = state.get()
 
-        for slot in 1 ... 4 {
+        for slot in 1 ... MultiviewLimits.maxSlots {
             let desired = snap.slots[slot]
 
             lock.lock()
@@ -60,7 +60,7 @@ final class SourceManager: @unchecked Sendable {
                     lock.lock()
                     restartBackoff[slot] = min(backoff * 2, Self.maxRestartBackoff)
                     lock.unlock()
-                    restartProvider(slot: slot, desired: desired, renderer: renderer)
+                    restartProvider(slot: slot, desired: desired, renderers: renderers)
                 }
                 continue
             }
@@ -68,11 +68,15 @@ final class SourceManager: @unchecked Sendable {
             lock.lock()
             restartBackoff[slot] = nil
             lock.unlock()
-            restartProvider(slot: slot, desired: desired, renderer: renderer)
+            restartProvider(slot: slot, desired: desired, renderers: renderers)
         }
 
-        renderer.setLayoutMode(snap.layout == .oneUp ? .oneUp : .fourUp)
-        renderer.setPrimarySlot(snap.primarySlot)
+        for renderer in renderers {
+            renderer.setLayoutMode(snap.layout == .oneUp ? .oneUp : .fourUp)
+            renderer.setPrimarySlot(snap.primarySlot)
+            renderer.setGridLayout(snap.gridLayout)
+            renderer.setGridSplit(snap.gridSplit)
+        }
     }
 
     /// Push on-screen pixel targets so providers downscale before GPU upload.
@@ -82,7 +86,13 @@ final class SourceManager: @unchecked Sendable {
         layout: AppState.LayoutMode,
         primarySlot: Int,
         oneUpScopeMonitor: Bool,
-        scopeMonitorSplit: ScopeMonitorSplit = .defaults
+        scopeMonitorSplit: ScopeMonitorSplit = .defaults,
+        gridLayout: GridLayout,
+        gridSplit: GridSplit,
+        dualMonitorMode: Bool,
+        programViewportWidth: Int? = nil,
+        programViewportHeight: Int? = nil,
+        programOneUpScopeMonitor: Bool = false
     ) {
         let geometryLayout: DisplayUploadGeometry.Layout = switch layout {
         case .oneUp where oneUpScopeMonitor:
@@ -90,22 +100,37 @@ final class SourceManager: @unchecked Sendable {
         case .oneUp:
             .oneUp(primarySlot: primarySlot)
         case .fourUp:
-            .fourUp
+            .grid(columns: gridLayout.columns, rows: gridLayout.rows, split: gridSplit)
         }
 
         lock.lock()
         let providerSnapshot = providers
         lock.unlock()
 
-        for slot in 1 ... 4 {
+        for slot in 1 ... MultiviewLimits.maxSlots {
             guard let provider = providerSnapshot[slot] as? DisplaySizedUploadProvider else { continue }
 
-            let cell = DisplayUploadGeometry.cellPixelSize(
+            var cell = DisplayUploadGeometry.cellPixelSize(
                 slot: slot,
                 layout: geometryLayout,
                 viewportWidth: viewportWidth,
                 viewportHeight: viewportHeight
             )
+
+            if dualMonitorMode, let pw = programViewportWidth, let ph = programViewportHeight, slot == primarySlot {
+                let programCell = DisplayUploadGeometry.cellPixelSize(
+                    slot: slot,
+                    layout: programOneUpScopeMonitor
+                        ? .oneUpScopeMonitor(primarySlot: primarySlot, split: scopeMonitorSplit)
+                        : .oneUp(primarySlot: primarySlot),
+                    viewportWidth: pw,
+                    viewportHeight: ph
+                )
+                cell = (
+                    max(cell.width, programCell.width),
+                    max(cell.height, programCell.height)
+                )
+            }
 
             let aspect: Float? = {
                 if let reporter = providerSnapshot[slot] as? VideoBroadcastAspectReporting {
@@ -136,7 +161,6 @@ final class SourceManager: @unchecked Sendable {
             } else if cell.width == 0 || cell.height == 0 {
                 provider.setTargetUploadSize(width: 0, height: 0)
             } else if sourceW == 0 || sourceH == 0 {
-                // Geometry known but no frame yet — reserve cell fit size for first upload.
                 let fit = DisplayUploadGeometry.aspectFitPixelSize(
                     cellWidth: cell.width,
                     cellHeight: cell.height,
@@ -154,7 +178,7 @@ final class SourceManager: @unchecked Sendable {
         lock.unlock()
 
         var out: [Int: FeedSignalStatus] = [:]
-        for slot in 1 ... 4 {
+        for slot in 1 ... MultiviewLimits.maxSlots {
             let assignment = snapshot.slots[slot]
             let provider = providerSnapshot[slot]
             let monitorable = provider as? MonitorableProvider
@@ -191,7 +215,7 @@ final class SourceManager: @unchecked Sendable {
         return providers[slot]
     }
 
-    private func restartProvider(slot: Int, desired: AppState.SourceRef?, renderer: MetalRenderer) {
+    private func restartProvider(slot: Int, desired: AppState.SourceRef?, renderers: [MetalRenderer]) {
         if let old = provider(slot: slot) as? NDIReceiver { old.stop() }
         if let old = provider(slot: slot) as? DeckLinkCapture { old.stop() }
 
@@ -219,6 +243,8 @@ final class SourceManager: @unchecked Sendable {
         lastRestartAt[slot] = Date()
         lock.unlock()
 
-        renderer.setProvider(forSlot: slot, provider: newProvider)
+        for renderer in renderers {
+            renderer.setProvider(forSlot: slot, provider: newProvider)
+        }
     }
 }

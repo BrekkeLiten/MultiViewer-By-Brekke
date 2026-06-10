@@ -2,43 +2,31 @@ import SwiftUI
 
 struct MainMonitorView: View {
     @Bindable var model: MonitorAppModel
+    @Environment(\.openWindow) private var openWindow
+
+    private var windowRole: MonitorWindowRole {
+        model.dualMonitorMode ? .multiview : .single
+    }
 
     var body: some View {
-        GeometryReader { geometry in
-            let size = geometry.size
-            ZStack {
-                MetalCanvasView(coordinator: model.metalCoordinator)
-                    .frame(width: size.width, height: size.height)
-
-                SignalStateOverlay(model: model, size: size)
-                FeedBadgeOverlay(model: model, size: size)
-
-                if model.oneUpScopeMonitorEnabled && model.layout == .oneUp {
-                    ScopeChromeOverlay(split: model.scopeMonitorSplit, size: size)
-                    ScopeDividerRepresentable(
-                        split: model.scopeMonitorSplit,
-                        isVisible: true
-                    ) { split, persist in
-                        model.applyScopeMonitorSplit(split, persist: persist)
-                    }
-                    .frame(width: size.width, height: size.height)
-                }
-
-                FourUpInteractionOverlay(model: model, size: size)
-            }
-            .frame(width: size.width, height: size.height)
-        }
-        .background(MonitorDesign.canvasBackground)
-        .preferredColorScheme(.dark)
+        MonitorContentView(
+            model: model,
+            coordinator: model.metalCoordinator,
+            windowRole: windowRole,
+            showLayoutSwitcher: !model.dualMonitorMode,
+            showPictureMonitoring: !model.dualMonitorMode
+        )
         .background(WindowChromeConfigurator(
-            title: AppBranding.displayName,
+            title: model.dualMonitorMode ? "\(AppBranding.displayName) — Multiview" : AppBranding.displayName,
             minimumSize: NSSize(width: 480, height: 270),
             activateOnAppear: true
         ))
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
-                LayoutModeSwitcher(selection: layoutBinding)
-                    .help("Layout: single full-frame or 2×2 multiview")
+                if !model.dualMonitorMode {
+                    LayoutModeSwitcher(selection: layoutBinding)
+                        .help("Layout: single full-frame or multiview grid")
+                }
 
                 Button("Inputs…") {
                     model.showSourcesEditor = true
@@ -47,42 +35,23 @@ struct MainMonitorView: View {
             }
 
             ToolbarItemGroup(placement: .primaryAction) {
-                Toggle(isOn: peakingBinding) {
-                    Label {
-                        Text("Focus Peaking")
-                    } icon: {
-                        FocusPeakingGlyph()
-                    }
+                if !model.dualMonitorMode {
+                    pictureMonitoringToolbar
                 }
-                .toggleStyle(.button)
-                .help("Focus peaking — highlight sharp edges")
 
-                Toggle(isOn: falseColorBinding) {
-                    Label {
-                        Text("False Color")
-                    } icon: {
-                        FalseColorGlyph()
+                if model.dualMonitorMode {
+                    Button("Program Monitor") {
+                        openWindow(id: "program")
                     }
+                    .help("Show or focus the program monitor window")
                 }
-                .toggleStyle(.button)
-                .help("False color — luma heat map")
-
-                Toggle(isOn: zebraBinding) {
-                    Label {
-                        Text("Zebra")
-                    } icon: {
-                        ZebraGlyph()
-                    }
-                }
-                .toggleStyle(.button)
-                .help("Zebra — over-exposure stripes")
 
                 SettingsLink {
                     Label("Settings", systemImage: "gearshape")
                 }
-                .help("Picture monitoring settings…")
+                .help("Preferences…")
                 .simultaneousGesture(TapGesture().onEnded {
-                    model.scrollPreferencesToPictureMonitoring = true
+                    model.scrollPreferencesToPictureMonitoring = false
                 })
             }
         }
@@ -91,24 +60,127 @@ struct MainMonitorView: View {
         .sheet(isPresented: $model.showSourcesEditor) {
             SourcesEditorView(model: model)
         }
-        .escapeReturnsToFourUp(model: model)
+        .escapeReturnsToFourUp(model: model, windowRole: windowRole)
         .onReceive(NotificationCenter.default.publisher(for: .metalMultiviewerScopeMonitorChanged)) { notification in
             if let enabled = notification.userInfo?["enabled"] as? Bool {
                 model.applyOneUpScopeMonitor(enabled)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .metalMultiviewerPictureMonitoringChanged)) { _ in
-            // The store is the live source of truth (HTTP control mutates it directly);
-            // reloading from disk here would revert remote toggles to stale persisted values.
             model.applyPictureMonitoring(model.monitoringStore.get(), persist: false)
         }
     }
 
+    @ViewBuilder
+    private var pictureMonitoringToolbar: some View {
+        Toggle(isOn: peakingBinding) {
+            Label { Text("Focus Peaking") } icon: { FocusPeakingGlyph() }
+        }
+        .toggleStyle(.button)
+        .help("Focus peaking — highlight sharp edges")
+
+        Toggle(isOn: falseColorBinding) {
+            Label { Text("False Color") } icon: { FalseColorGlyph() }
+        }
+        .toggleStyle(.button)
+        .help("False color — luma heat map")
+
+        Toggle(isOn: zebraBinding) {
+            Label { Text("Zebra") } icon: { ZebraGlyph() }
+        }
+        .toggleStyle(.button)
+        .help("Zebra — over-exposure stripes")
+    }
+
     private var layoutBinding: Binding<AppState.LayoutMode> {
+        Binding(get: { model.layout }, set: { model.setLayout($0) })
+    }
+
+    private var peakingBinding: Binding<Bool> {
         Binding(
-            get: { model.layout },
-            set: { model.setLayout($0) }
+            get: { model.pictureMonitoring.focusPeakingEnabled },
+            set: { enabled in
+                var next = model.pictureMonitoring
+                next.focusPeakingEnabled = enabled
+                model.applyPictureMonitoring(next, persist: true)
+            }
         )
+    }
+
+    private var falseColorBinding: Binding<Bool> {
+        Binding(
+            get: { model.pictureMonitoring.falseColorEnabled },
+            set: { enabled in
+                var next = model.pictureMonitoring
+                next.falseColorEnabled = enabled
+                model.applyPictureMonitoring(next, persist: true)
+            }
+        )
+    }
+
+    private var zebraBinding: Binding<Bool> {
+        Binding(
+            get: { model.pictureMonitoring.zebraEnabled },
+            set: { enabled in
+                var next = model.pictureMonitoring
+                next.zebraEnabled = enabled
+                model.applyPictureMonitoring(next, persist: true)
+            }
+        )
+    }
+}
+
+struct ProgramMonitorView: View {
+    @Bindable var model: MonitorAppModel
+
+    var body: some View {
+        Group {
+            if let coordinator = model.programCoordinator {
+                MonitorContentView(
+                    model: model,
+                    coordinator: coordinator,
+                    windowRole: .program,
+                    showLayoutSwitcher: false,
+                    showPictureMonitoring: true
+                )
+            } else {
+                ContentUnavailableView(
+                    "Program Monitor",
+                    systemImage: "rectangle.inset.filled",
+                    description: Text("Enable dual monitor mode in Preferences.")
+                )
+            }
+        }
+        .background(WindowChromeConfigurator(
+            title: "\(AppBranding.displayName) — Program",
+            minimumSize: NSSize(width: 480, height: 270),
+            activateOnAppear: false
+        ))
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Toggle(isOn: peakingBinding) {
+                    Label { Text("Focus Peaking") } icon: { FocusPeakingGlyph() }
+                }
+                .toggleStyle(.button)
+
+                Toggle(isOn: falseColorBinding) {
+                    Label { Text("False Color") } icon: { FalseColorGlyph() }
+                }
+                .toggleStyle(.button)
+
+                Toggle(isOn: zebraBinding) {
+                    Label { Text("Zebra") } icon: { ZebraGlyph() }
+                }
+                .toggleStyle(.button)
+            }
+        }
+        .toolbarBackground(MonitorDesign.canvasBackground, for: .windowToolbar)
+        .toolbarBackground(.visible, for: .windowToolbar)
+        .onAppear {
+            if model.programCoordinator == nil {
+                try? model.openProgramMonitor()
+            }
+        }
     }
 
     private var peakingBinding: Binding<Bool> {

@@ -26,10 +26,11 @@ func monitorPlaybackLowBandwidthWhenExplicitlyDisabled() {
 }
 
 @Test
-func displayUploadGeometryFourUpCellIsHalfViewport() {
+func displayUploadGeometryGrid2x2CellIsHalfViewport() {
+    let split = GridSplit.equal(columns: 2, rows: 2)
     let cell = DisplayUploadGeometry.cellPixelSize(
         slot: 2,
-        layout: .fourUp,
+        layout: .grid(columns: 2, rows: 2, split: split),
         viewportWidth: 1920,
         viewportHeight: 1080
     )
@@ -268,14 +269,43 @@ func multiviewSlotLayoutMapsQuadrantMidpoints() {
 @Test
 func multiviewSlotLayoutQuadrantFramesTileViewport() {
     let size = CGSize(width: 1000, height: 800)
-    let q1 = MultiviewSlotLayout.quadrantFrame(slot: 1, in: size)
-    let q2 = MultiviewSlotLayout.quadrantFrame(slot: 2, in: size)
-    let q3 = MultiviewSlotLayout.quadrantFrame(slot: 3, in: size)
-    let q4 = MultiviewSlotLayout.quadrantFrame(slot: 4, in: size)
+    let split = GridSplit.equal(columns: 2, rows: 2)
+    let q1 = MultiviewSlotLayout.cellFrame(slot: 1, columns: 2, rows: 2, split: split, in: size)
+    let q2 = MultiviewSlotLayout.cellFrame(slot: 2, columns: 2, rows: 2, split: split, in: size)
+    let q3 = MultiviewSlotLayout.cellFrame(slot: 3, columns: 2, rows: 2, split: split, in: size)
+    let q4 = MultiviewSlotLayout.cellFrame(slot: 4, columns: 2, rows: 2, split: split, in: size)
     #expect(q1 == CGRect(x: 0, y: 0, width: 500, height: 400))
     #expect(q2 == CGRect(x: 500, y: 0, width: 500, height: 400))
     #expect(q3 == CGRect(x: 0, y: 400, width: 500, height: 400))
     #expect(q4 == CGRect(x: 500, y: 400, width: 500, height: 400))
+}
+
+@Test
+func gridLayoutClampsToMaxSlots() {
+    let grid = GridLayout(columns: 4, rows: 4)
+    #expect(grid.slotCount == 16)
+    #expect(GridLayout.isValid(columns: 4, rows: 4))
+    #expect(!GridLayout.isValid(columns: 5, rows: 5))
+    let clamped = GridLayout(columns: 5, rows: 5)
+    #expect(clamped.rows <= 3)
+    #expect(clamped.slotCount <= 16)
+}
+
+@Test
+func gridLayout3x2SlotNumbering() {
+    let size = CGSize(width: 900, height: 600)
+    let split = GridSplit.equal(columns: 3, rows: 2)
+    #expect(MultiviewSlotLayout.slotForPoint(CGPoint(x: 50, y: 50), columns: 3, rows: 2, split: split, in: size) == 1)
+    #expect(MultiviewSlotLayout.slotForPoint(CGPoint(x: 450, y: 50), columns: 3, rows: 2, split: split, in: size) == 2)
+    #expect(MultiviewSlotLayout.slotForPoint(CGPoint(x: 850, y: 50), columns: 3, rows: 2, split: split, in: size) == 3)
+    #expect(MultiviewSlotLayout.slotForPoint(CGPoint(x: 50, y: 550), columns: 3, rows: 2, split: split, in: size) == 4)
+}
+
+@Test
+func configLoaderEffectiveGridDefaults2x2() {
+    let grid = ConfigLoader.effectiveGridLayout(config: nil)
+    #expect(grid.columns == 2)
+    #expect(grid.rows == 2)
 }
 
 @Test

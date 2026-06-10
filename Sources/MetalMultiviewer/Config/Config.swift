@@ -28,6 +28,20 @@ struct AppConfig: Codable, Equatable {
     var focusPeakingSensitivity: Float?
     /// Zebra threshold 0.70…1.00 (70–100% IRE).
     var zebraLevel: Float?
+    /// Multiview grid columns (1…16). Omit/`nil` ⇒ 2 when `layout` is 4 or unset.
+    var gridColumns: Int?
+    /// Multiview grid rows (1…16, columns × rows ≤ 16). Omit/`nil` ⇒ 2.
+    var gridRows: Int?
+    /// Cumulative column split fractions (length = gridColumns - 1).
+    var gridColumnSplits: [Float]?
+    /// Cumulative row split fractions (length = gridRows - 1).
+    var gridRowSplits: [Float]?
+    /// When **true**, multiview and program monitors run in separate windows. Omit/`nil` ⇒ off.
+    var dualMonitorMode: Bool?
+    /// Optional display UUID for multiview window placement.
+    var multiviewScreenID: String?
+    /// Optional display UUID for program window placement.
+    var programScreenID: String?
 }
 
 extension Notification.Name {
@@ -75,7 +89,14 @@ extension AppConfig {
             zebraEnabled: nil,
             focusPeakingColor: nil,
             focusPeakingSensitivity: nil,
-            zebraLevel: nil
+            zebraLevel: nil,
+            gridColumns: nil,
+            gridRows: nil,
+            gridColumnSplits: nil,
+            gridRowSplits: nil,
+            dualMonitorMode: nil,
+            multiviewScreenID: nil,
+            programScreenID: nil
         )
     }
 }
@@ -158,6 +179,18 @@ enum ConfigLoader {
         case 4: return .fourUp
         default: return .fourUp
         }
+    }
+
+    static func effectiveGridLayout(config: AppConfig?) -> GridLayout {
+        GridLayout.from(config: config)
+    }
+
+    static func effectiveGridSplit(config: AppConfig?, grid: GridLayout) -> GridSplit {
+        GridSplit.from(config: config, grid: grid)
+    }
+
+    static func effectiveDualMonitorMode(config: AppConfig?) -> Bool {
+        config?.dualMonitorMode == true
     }
 
     static func defaultConfigPath() -> URL {

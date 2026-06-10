@@ -88,6 +88,34 @@ final class ScopeAnalyzer: @unchecked Sendable {
         encoder.endEncoding()
     }
 
+    /// Zeros histogram buffers and rebuilds scope textures so panels go black when no feed is present.
+    func encodeClear(on commandBuffer: MTLCommandBuffer) {
+        if let blit = commandBuffer.makeBlitCommandEncoder() {
+            blit.fill(buffer: rgbHistBuffer, range: 0 ..< rgbHistBuffer.length, value: 0)
+            blit.fill(buffer: vectorscopeHistBuffer, range: 0 ..< vectorscopeHistBuffer.length, value: 0)
+            blit.endEncoding()
+        }
+
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+
+        encoder.setComputePipelineState(buildRGBWaveformPipeline)
+        encoder.setTexture(rgbWaveformTexture, index: 0)
+        encoder.setBuffer(rgbHistBuffer, offset: 0, index: 0)
+        dispatch2D(encoder: encoder, width: Self.analysisColumns, height: Self.analysisLevels)
+
+        encoder.setComputePipelineState(buildRGBParadePipeline)
+        encoder.setTexture(rgbParadeTexture, index: 0)
+        encoder.setBuffer(rgbHistBuffer, offset: 0, index: 0)
+        dispatch2D(encoder: encoder, width: Self.analysisColumns * 3, height: Self.analysisLevels)
+
+        encoder.setComputePipelineState(buildVectorscopePipeline)
+        encoder.setTexture(vectorscopeTexture, index: 0)
+        encoder.setBuffer(vectorscopeHistBuffer, offset: 0, index: 0)
+        dispatch2D(encoder: encoder, width: Self.vectorscopeSize, height: Self.vectorscopeSize)
+
+        encoder.endEncoding()
+    }
+
     private func dispatch2D(encoder: MTLComputeCommandEncoder, width: Int, height: Int) {
         let tgSize = MTLSize(width: 16, height: 16, depth: 1)
         let tgCount = MTLSize(width: (width + 15) / 16, height: (height + 15) / 16, depth: 1)

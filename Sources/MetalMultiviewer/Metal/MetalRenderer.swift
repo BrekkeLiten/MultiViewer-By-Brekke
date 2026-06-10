@@ -2,6 +2,12 @@ import Foundation
 import Metal
 import MetalKit
 
+enum MonitorWindowRole: Sendable {
+    case single
+    case multiview
+    case program
+}
+
 final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     enum LayoutMode: Int {
         case oneUp = 1
@@ -23,8 +29,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     private let scopeAnalyzer: ScopeAnalyzer
 
     private var layoutMode: LayoutMode = .fourUp
-    /// Slot to draw in fullscreen when `layoutMode == .oneUp` (Metal slot index 1…4).
+    private var windowRole: MonitorWindowRole = .single
+    /// Slot to draw in fullscreen when `layoutMode == .oneUp` (Metal slot index 1…16).
     private var primarySlot: Int = 1
+    private var gridLayout = GridLayout.default2x2
+    private var gridSplit = GridSplit.equal(columns: 2, rows: 2)
     private var oneUpScopeMonitorEnabled = false
     private var scopeMonitorSplit = ScopeMonitorSplit.defaults
     private var pictureMonitoring = PictureMonitoringSettings.defaults
@@ -105,7 +114,20 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     }
 
     func setPrimarySlot(_ slot: Int) {
-        primarySlot = min(max(slot, 1), 4)
+        primarySlot = min(max(slot, 1), MultiviewLimits.maxSlots)
+    }
+
+    func setWindowRole(_ role: MonitorWindowRole) {
+        windowRole = role
+    }
+
+    func setGridLayout(_ layout: GridLayout) {
+        gridLayout = layout
+        gridSplit = gridSplit.resized(for: layout)
+    }
+
+    func setGridSplit(_ split: GridSplit) {
+        gridSplit = split
     }
 
     func setOneUpScopeMonitorEnabled(_ enabled: Bool) {
@@ -142,10 +164,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
                 let commandBuffer = commandQueue.makeCommandBuffer()
             else { return }
 
-            let quadStripsPerFrame: Int = switch layoutMode {
-            case .fourUp: 4
-            case .oneUp where oneUpScopeMonitorEnabled: 4
-            case .oneUp: 1
+            let effectiveOneUp = effectiveShowsOneUp
+            let gridSlotCount = gridLayout.slotCount
+            let quadStripsPerFrame: Int = switch (effectiveOneUp, oneUpScopeMonitorEnabled) {
+            case (false, _): gridSlotCount
+            case (true, true): 4
+            case (true, false): 1
             }
             let stripBytes = MemoryLayout<Vertex>.stride * Self.triangleStripVertexCount
             let arenaNeeded = stripBytes * quadStripsPerFrame
@@ -160,15 +184,14 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
                 drawableHeight: drawableTex.height
             )
 
-            let t1 = feedTexture(forSlot: 1)
-            let t2 = feedTexture(forSlot: 2)
-            let t3 = feedTexture(forSlot: 3)
-            let t4 = feedTexture(forSlot: 4)
-
-            let ps = layoutMode == .oneUp ? primarySlot : 1
-            let oneTex = layoutMode == .oneUp ? feedTexture(forSlot: ps) : t1
-            if layoutMode == .oneUp, oneUpScopeMonitorEnabled, oneTex.width > Self.placeholderSide {
-                scopeAnalyzer.encodeAnalysis(of: oneTex, on: commandBuffer)
+            let ps = effectiveOneUp ? primarySlot : 1
+            let oneTex = effectiveOneUp ? feedTexture(forSlot: ps) : feedTexture(forSlot: 1)
+            if effectiveOneUp, oneUpScopeMonitorEnabled {
+                if oneTex.width > Self.placeholderSide {
+                    scopeAnalyzer.encodeAnalysis(of: oneTex, on: commandBuffer)
+                } else {
+                    scopeAnalyzer.encodeClear(on: commandBuffer)
+                }
             }
 
             // CPU `replace` on `.storageModeShared` textures is typically visible to the GPU in the same
@@ -181,8 +204,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
             encoder.setRenderPipelineState(monitoredPipeline)
             encoder.setFragmentSamplerState(sampler, index: 0)
 
-            switch layoutMode {
-            case .oneUp:
+            if effectiveOneUp {
                 // Reuse the texture fetched for scope analysis above so the scopes and
                 // the picture can't show two different frames within one draw.
                 if oneUpScopeMonitorEnabled {
@@ -240,48 +262,43 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
                         viewportPx: vp
                     )
                 }
-            case .fourUp:
-                drawFittedQuad(
-                    encoder: encoder,
-                    vb: vb,
-                    stripByteOffset: 0,
-                    texture: t1,
-                    cell: RectNDC.quadrant(.topLeft),
-                    slot: 1,
-                    viewportPx: vp
-                )
-                drawFittedQuad(
-                    encoder: encoder,
-                    vb: vb,
-                    stripByteOffset: stripBytes,
-                    texture: t2,
-                    cell: RectNDC.quadrant(.topRight),
-                    slot: 2,
-                    viewportPx: vp
-                )
-                drawFittedQuad(
-                    encoder: encoder,
-                    vb: vb,
-                    stripByteOffset: stripBytes * 2,
-                    texture: t3,
-                    cell: RectNDC.quadrant(.bottomLeft),
-                    slot: 3,
-                    viewportPx: vp
-                )
-                drawFittedQuad(
-                    encoder: encoder,
-                    vb: vb,
-                    stripByteOffset: stripBytes * 3,
-                    texture: t4,
-                    cell: RectNDC.quadrant(.bottomRight),
-                    slot: 4,
-                    viewportPx: vp
-                )
+            } else {
+                for slot in 1 ... gridSlotCount {
+                    let region = MultiviewSlotLayout.cellNDC(
+                        slot: slot,
+                        columns: gridLayout.columns,
+                        rows: gridLayout.rows,
+                        split: gridSplit
+                    )
+                    let cell = RectNDC(
+                        minX: region.minX,
+                        maxX: region.maxX,
+                        minY: region.minY,
+                        maxY: region.maxY
+                    )
+                    drawFittedQuad(
+                        encoder: encoder,
+                        vb: vb,
+                        stripByteOffset: stripBytes * (slot - 1),
+                        texture: feedTexture(forSlot: slot),
+                        cell: cell,
+                        slot: slot,
+                        viewportPx: vp
+                    )
+                }
             }
 
             encoder.endEncoding()
             commandBuffer.present(drawable)
             commandBuffer.commit()
+        }
+    }
+
+    private var effectiveShowsOneUp: Bool {
+        switch windowRole {
+        case .multiview: return false
+        case .program: return true
+        case .single: return layoutMode == .oneUp
         }
     }
 

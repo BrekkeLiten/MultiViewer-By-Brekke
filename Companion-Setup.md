@@ -87,11 +87,13 @@ Replace the host and port with the URL from MultiViewer **Preferences**.
 
 | Button idea | URL |
 |-------------|-----|
-| **4-up multiview** | `http://192.168.0.185:8080/layout/4` |
+| **2×2 multiview** | `http://192.168.0.185:8080/layout/4` |
+| **3×2 multiview** | `http://192.168.0.185:8080/layout/grid/3/2` |
+| **4×4 multiview (16 slots)** | `http://192.168.0.185:8080/layout/grid/4/4` |
 | **1-up (single full screen)** | `http://192.168.0.185:8080/layout/1` |
-| **1-up, show slot 2** | `http://192.168.0.185:8080/layout/primary/2` |
+| **1-up / program, show slot 2** | `http://192.168.0.185:8080/layout/primary/2` |
 
-`primary` sets which input (1–4) fills the screen in **1-up** mode.
+`primary` sets which input (1–16) fills the **1-up** or **program monitor** window. Grid size is configured in **Preferences → Multiview grid** or via `/layout/grid/{cols}/{rows}`.
 
 ### Assign a source to a slot
 
@@ -101,7 +103,7 @@ Route pattern:
 POST /source/{slot}/{source}
 ```
 
-`{slot}` is **1**, **2**, **3**, or **4**.
+`{slot}` is **1** through **16** (up to your grid's `columns × rows`).
 
 `{source}` is the same text you pick in **Configure inputs**, for example:
 

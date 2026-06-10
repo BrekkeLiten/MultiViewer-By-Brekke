@@ -3,20 +3,35 @@ import SwiftUI
 struct SignalStateOverlay: View {
     let model: MonitorAppModel
     let size: CGSize
+    let windowRole: MonitorWindowRole
 
     var body: some View {
         ZStack(alignment: .topLeading) {
-            if model.layout == .fourUp {
-                ForEach(1 ... 4, id: \.self) { slot in
-                    panel(for: slot, frame: MultiviewSlotLayout.quadrantFrame(slot: slot, in: size))
+            if effectiveShowsGrid {
+                ForEach(1 ... model.gridLayout.slotCount, id: \.self) { slot in
+                    let frame = MultiviewSlotLayout.cellFrame(
+                        slot: slot,
+                        columns: model.gridLayout.columns,
+                        rows: model.gridLayout.rows,
+                        split: model.gridSplit,
+                        in: size
+                    )
+                    panel(for: slot, frame: frame)
                 }
             } else {
-                let frame = pictureFrame
-                panel(for: model.primarySlot, frame: frame)
+                panel(for: model.primarySlot, frame: pictureFrame)
             }
         }
         .frame(width: size.width, height: size.height, alignment: .topLeading)
         .allowsHitTesting(false)
+    }
+
+    private var effectiveShowsGrid: Bool {
+        switch windowRole {
+        case .multiview: return true
+        case .program: return false
+        case .single: return model.layout == .fourUp
+        }
     }
 
     private var pictureFrame: CGRect {
