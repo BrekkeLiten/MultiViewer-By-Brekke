@@ -31,12 +31,20 @@ final class ScopeAnalyzer: @unchecked Sendable {
         let rgbCount = Self.analysisColumns * 3 * Self.analysisLevels
         let vectorCount = Self.vectorscopeSize * Self.vectorscopeSize
 
-        rgbHistBuffer = device.makeBuffer(length: rgbCount * MemoryLayout<UInt32>.stride, options: .storageModeShared)!
-        vectorscopeHistBuffer = device.makeBuffer(length: vectorCount * MemoryLayout<UInt32>.stride, options: .storageModeShared)!
-
-        rgbWaveformTexture = Self.makeScopeTexture(device: device, width: Self.analysisColumns, height: Self.analysisLevels)
-        rgbParadeTexture = Self.makeScopeTexture(device: device, width: Self.analysisColumns * 3, height: Self.analysisLevels)
-        vectorscopeTexture = Self.makeScopeTexture(device: device, width: Self.vectorscopeSize, height: Self.vectorscopeSize)
+        guard
+            let rgbHist = device.makeBuffer(length: rgbCount * MemoryLayout<UInt32>.stride, options: .storageModeShared),
+            let vectorHist = device.makeBuffer(length: vectorCount * MemoryLayout<UInt32>.stride, options: .storageModeShared),
+            let waveform = Self.makeScopeTexture(device: device, width: Self.analysisColumns, height: Self.analysisLevels),
+            let parade = Self.makeScopeTexture(device: device, width: Self.analysisColumns * 3, height: Self.analysisLevels),
+            let vectorscope = Self.makeScopeTexture(device: device, width: Self.vectorscopeSize, height: Self.vectorscopeSize)
+        else {
+            throw NSError(domain: "ScopeAnalyzer", code: 2, userInfo: [NSLocalizedDescriptionKey: "GPU resource allocation failed"])
+        }
+        rgbHistBuffer = rgbHist
+        vectorscopeHistBuffer = vectorHist
+        rgbWaveformTexture = waveform
+        rgbParadeTexture = parade
+        vectorscopeTexture = vectorscope
     }
 
     func encodeAnalysis(of source: MTLTexture, on commandBuffer: MTLCommandBuffer) {
@@ -93,7 +101,7 @@ final class ScopeAnalyzer: @unchecked Sendable {
         return try library.device.makeComputePipelineState(function: fn)
     }
 
-    private static func makeScopeTexture(device: MTLDevice, width: Int, height: Int) -> MTLTexture {
+    private static func makeScopeTexture(device: MTLDevice, width: Int, height: Int) -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba16Float,
             width: width,
@@ -101,6 +109,6 @@ final class ScopeAnalyzer: @unchecked Sendable {
             mipmapped: false
         )
         desc.usage = [.shaderRead, .shaderWrite]
-        return device.makeTexture(descriptor: desc)!
+        return device.makeTexture(descriptor: desc)
     }
 }

@@ -1,23 +1,20 @@
 import { HudBadge } from "./hud-badge";
 
-const features = [
+const features: { title: string; body: string; badge: string; span?: string }[] = [
   {
     title: "1-up & 4-up layouts",
     body: "Full-screen slot 1 or four quadrants — switch instantly from the app, View menu, or over HTTP.",
     badge: "Layout",
-    span: "",
   },
   {
     title: "NDI® built in",
     body: "Release builds ship the NDI runtime inside the app. Discover sources, connect by IP, or assign by name.",
     badge: "NDI",
-    span: "",
   },
   {
     title: "DeckLink SDI",
     body: "Capture from Blackmagic hardware when Desktop Video drivers are installed.",
     badge: "SDI",
-    span: "",
   },
   {
     title: "1-up scope monitor",
@@ -29,13 +26,11 @@ const features = [
     title: "Picture monitoring",
     body: "GPU focus peaking, false color, and zebra on every visible feed. Title-bar P / F / Z toggles and ⌘⇧ shortcuts.",
     badge: "Monitor",
-    span: "",
   },
   {
     title: "Correct aspect ratio",
     body: "Incoming frames are letterboxed or pillarboxed to match broadcast display aspect.",
     badge: "Display",
-    span: "",
   },
   {
     title: "HTTP control API",
@@ -47,7 +42,6 @@ const features = [
     title: "Flexible control server",
     body: "Bind to localhost, your LAN IP, or all interfaces — copy the URL from Preferences.",
     badge: "Control",
-    span: "",
   },
 ];
 
@@ -66,11 +60,10 @@ export function Features() {
       </div>
 
       <div className="grid gap-4 md:grid-cols-2">
-        {features.map((feature, index) => (
+        {features.map((feature) => (
           <article
             key={feature.title}
-            className={`panel-bezel group rounded-xl p-6 transition-colors hover:border-accent-signal/30 ${feature.span}`}
-            style={{ animationDelay: `${320 + index * 80}ms` }}
+            className={`panel-bezel group rounded-xl p-6 transition-colors hover:border-accent-signal/30 ${feature.span ?? ""}`}
           >
             <HudBadge className="mb-4">{feature.badge}</HudBadge>
             <h3 className="font-display text-xl font-bold text-text-primary">{feature.title}</h3>

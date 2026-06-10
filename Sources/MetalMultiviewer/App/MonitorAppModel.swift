@@ -50,6 +50,12 @@ final class MonitorAppModel {
         loadSlotsFromConfig(cfg, into: state)
     }
 
+    isolated deinit {
+        if let remoteStateObserver {
+            NotificationCenter.default.removeObserver(remoteStateObserver)
+        }
+    }
+
     func finishLaunchSetup() {
         monitoringStore.set(pictureMonitoring, notify: false)
         controlServerManager.apply(
@@ -97,11 +103,26 @@ final class MonitorAppModel {
     }
 
     func refreshOverlayData() {
+        // Runs at 20 Hz from the reconcile timer — only write @Observable
+        // properties when values actually changed to avoid SwiftUI churn.
         let snap = appState.get()
-        layout = snap.layout
-        primarySlot = snap.primarySlot
-        feedDimensions = metalCoordinator.feedDimensionsBySlot()
-        signalStatus = metalCoordinator.feedSignalStatusBySlot(snapshot: snap)
+        if layout != snap.layout { layout = snap.layout }
+        if primarySlot != snap.primarySlot { primarySlot = snap.primarySlot }
+        let dims = metalCoordinator.feedDimensionsBySlot()
+        if !Self.dimensionsEqual(feedDimensions, dims) { feedDimensions = dims }
+        let status = metalCoordinator.feedSignalStatusBySlot(snapshot: snap)
+        if signalStatus != status { signalStatus = status }
+    }
+
+    private static func dimensionsEqual(
+        _ a: [Int: (width: Int, height: Int)],
+        _ b: [Int: (width: Int, height: Int)]
+    ) -> Bool {
+        guard a.count == b.count else { return false }
+        for (slot, dims) in a {
+            guard let other = b[slot], other == dims else { return false }
+        }
+        return true
     }
 
     func setLayout(_ mode: AppState.LayoutMode) {
@@ -190,13 +211,6 @@ final class MonitorAppModel {
         var next = pictureMonitoring
         next.zebraEnabled.toggle()
         applyPictureMonitoring(next, persist: true)
-    }
-
-    func syncPictureMonitoringFromDisk() {
-        let cfg = (try? settingsStore.load()) ?? .empty
-        workingConfig = cfg
-        let monitoring = ConfigLoader.effectivePictureMonitoring(config: cfg)
-        applyPictureMonitoring(monitoring, persist: false)
     }
 
     func syncFromAppState() {

@@ -11,6 +11,9 @@ final class SourceManager: @unchecked Sendable {
     private var providers: [Int: FrameProvider] = [:]
     private var assignments: [Int: AppState.SourceRef] = [:]
     private var lastRestartAt: [Int: Date] = [:]
+    /// Doubling restart delay per slot for persistently dead feeds (reset when frames flow again).
+    private var restartBackoff: [Int: TimeInterval] = [:]
+    private static let maxRestartBackoff: TimeInterval = 30
 
     init(
         device: MTLDevice,
@@ -36,22 +39,35 @@ final class SourceManager: @unchecked Sendable {
             lock.unlock()
 
             if current == desired {
-                if let monitorable = existingProvider as? MonitorableProvider,
-                   let last = monitorable.lastFrameAt,
-                   Date().timeIntervalSince(last) > FeedSignalPolicy.staleInterval
-                {
-                    let now = Date()
-                    lock.lock()
-                    let lastRestart = lastRestartAt[slot]
-                    lock.unlock()
+                guard let monitorable = existingProvider as? MonitorableProvider,
+                      let last = monitorable.lastFrameAt
+                else { continue }
 
-                    if lastRestart == nil || now.timeIntervalSince(lastRestart!) > FeedSignalPolicy.staleInterval {
-                        restartProvider(slot: slot, desired: desired, renderer: renderer)
-                    }
+                let now = Date()
+                if now.timeIntervalSince(last) <= FeedSignalPolicy.staleInterval {
+                    lock.lock()
+                    restartBackoff[slot] = nil
+                    lock.unlock()
+                    continue
+                }
+
+                lock.lock()
+                let lastRestart = lastRestartAt[slot]
+                let backoff = restartBackoff[slot] ?? FeedSignalPolicy.staleInterval
+                lock.unlock()
+
+                if lastRestart == nil || now.timeIntervalSince(lastRestart!) > backoff {
+                    lock.lock()
+                    restartBackoff[slot] = min(backoff * 2, Self.maxRestartBackoff)
+                    lock.unlock()
+                    restartProvider(slot: slot, desired: desired, renderer: renderer)
                 }
                 continue
             }
 
+            lock.lock()
+            restartBackoff[slot] = nil
+            lock.unlock()
             restartProvider(slot: slot, desired: desired, renderer: renderer)
         }
 

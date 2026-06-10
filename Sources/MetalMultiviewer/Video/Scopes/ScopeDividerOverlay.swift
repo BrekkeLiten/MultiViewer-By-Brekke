@@ -82,14 +82,19 @@ final class ScopeDividerOverlay: NSView {
     override func mouseDragged(with event: NSEvent) {
         guard let axis = activeDrag else { return }
         let point = convert(event.locationInWindow, from: nil)
-        var next = split
+        // Route through the clamping init so edge-drags can't produce invalid panel geometry.
+        let next: ScopeMonitorSplit
         switch axis {
         case .column:
-            let fraction = Float(point.x / max(bounds.width, 1))
-            next.columnFraction = fraction
+            next = ScopeMonitorSplit(
+                columnFraction: Float(point.x / max(bounds.width, 1)),
+                rowFraction: split.rowFraction
+            )
         case .row:
-            let fraction = Float(point.y / max(bounds.height, 1))
-            next.rowFraction = fraction
+            next = ScopeMonitorSplit(
+                columnFraction: split.columnFraction,
+                rowFraction: Float(point.y / max(bounds.height, 1))
+            )
         }
         split = next
         onSplitChanged(next, false)

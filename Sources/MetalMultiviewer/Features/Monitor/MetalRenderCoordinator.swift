@@ -8,6 +8,7 @@ final class MetalRenderCoordinator {
     let mtkView: MTKView
     private(set) var renderer: MetalRenderer?
     private(set) var sourceManager: SourceManager?
+    private var appState: AppState?
     private var reconcileTimer: Timer?
     private var onRefresh: (() -> Void)?
 
@@ -59,13 +60,19 @@ final class MetalRenderCoordinator {
         )
         self.sourceManager = sourceManager
 
-        let rendererRef = renderer
-        let appStateRef = appState
+        self.appState = appState
+        // Capture only weak self: the timer must not keep the source manager,
+        // renderer, or app state alive past the coordinator's lifetime.
         reconcileTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-            sourceManager.reconcile(with: rendererRef)
             Task { @MainActor [weak self] in
-                guard let self else { return }
-                let snap = appStateRef.get()
+                guard
+                    let self,
+                    let sourceManager = self.sourceManager,
+                    let renderer = self.renderer,
+                    let appState = self.appState
+                else { return }
+                sourceManager.reconcile(with: renderer)
+                let snap = appState.get()
                 let viewport = self.effectiveDrawablePixelSize()
                 sourceManager.updateDisplayUploadTargets(
                     viewportWidth: viewport.width,
@@ -78,6 +85,10 @@ final class MetalRenderCoordinator {
                 self.onRefresh?()
             }
         }
+    }
+
+    isolated deinit {
+        reconcileTimer?.invalidate()
     }
 
     private var oneUpScopeMonitorEnabled = false

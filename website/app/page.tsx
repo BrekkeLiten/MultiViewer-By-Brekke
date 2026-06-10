@@ -9,11 +9,13 @@ export default function Home() {
   return (
     <div className="page-backdrop animate-grain-fade relative min-h-screen">
       <div className="relative z-10">
-        <Hero />
-        <Features />
-        <Shortcuts />
-        <Requirements />
-        <CompanionTeaser />
+        <main>
+          <Hero />
+          <Features />
+          <Shortcuts />
+          <Requirements />
+          <CompanionTeaser />
+        </main>
         <Footer />
       </div>
     </div>

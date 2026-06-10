@@ -207,22 +207,22 @@ Success: JSON `{"ok":true}`. Errors: `400` with `{"ok":false,"error":"…"}`.
 
 ## Bitfocus Companion setup
 
-Companion does not need a bespoke module if you use the **generic HTTP / generic TCP** helpers.
+See **[Companion-Setup.md](Companion-Setup.md)** for the full walkthrough (button recipes, URL encoding, troubleshooting).
 
-### Generic HTTP Request (recommended)
+Quick version — Companion does not need a bespoke module; use the **generic HTTP** helper:
 
-1. Edit a button → **Actions** → add **HTTP** / **REST**–style action (exact name varies by Companion version — “HTTP Request”, “TCP/UDP Send”, or use **[companion-generic-http](https://github.com/bitfocus/companion-generic-http)** module if installed).
+1. Edit a button → **Actions** → add an **HTTP Request**–style action.
 2. Method: **`POST`**.
 3. URL examples (port **8080**):
-   - **4-up**: `http://127.0.0.1:8080/layout/4`
-   - **1-up**: `http://127.0.0.1:8080/layout/1`
+   - **4-up**: `http://<multiviewer-host>:8080/layout/4`
+   - **1-up**: `http://<multiviewer-host>:8080/layout/1`
    - **NDI slot 2**:  
-     `http://127.0.0.1:8080/source/2/` + encoded name, e.g.  
-     `http://127.0.0.1:8080/source/2/ndi%3AMYHOST%20(Screen%201)` (`ndi:` encoded as `%3A`).
+     `http://<multiviewer-host>:8080/source/2/` + encoded name, e.g.  
+     `http://<multiviewer-host>:8080/source/2/ndi%3AMYHOST%20(Screen%201)` (`ndi:` encoded as `%3A`).
 4. No auth or custom headers required.
-5. If Companion runs on another computer, **`127.0.0.1` points at that remote machine**, not the MultiViewer host — expose the HTTP server on a reachable interface first (currently not configured in-repo).
+5. If Companion runs on another computer, set the control server's **bind address** in **Preferences → Control** to your LAN IP (or `0.0.0.0` for all interfaces) and use the MultiViewer host's IP in URLs — `127.0.0.1` only works when Companion runs on the same machine.
 
-Tip: Encode tricky NDI titles in Companion using a **Javascript** trigger or Companion’s encoding fields; test with **curl**:
+Test with **curl**:
 
 ```bash
 curl -X POST 'http://127.0.0.1:8080/layout/4'

@@ -46,9 +46,9 @@ export function MonitorMockup({ className = "" }: { className?: string }) {
 
       <div className="relative aspect-video overflow-hidden rounded-lg border border-border-dim bg-black">
         <div className="absolute inset-0 grid grid-cols-2 grid-rows-2 gap-px bg-border-dim">
-          {slots.map((slot) => (
+          {slots.map((slot, index) => (
             <div
-              key={slot.label}
+              key={index}
               className={`relative overflow-hidden bg-gradient-to-br ${slot.tint}`}
             >
               <div className="absolute inset-0 opacity-20 bg-[linear-gradient(rgba(255,255,255,0.04)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.04)_1px,transparent_1px)] bg-[size:8px_8px]" />

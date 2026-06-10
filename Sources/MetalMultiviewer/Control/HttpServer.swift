@@ -72,7 +72,8 @@ final class ControlServer {
 
             guard
                 let slotStr = request.params[":slot"],
-                let slot = Int(slotStr)
+                let slot = Int(slotStr),
+                (1 ... 4).contains(slot)
             else {
                 return .badRequest(.json(["ok": false, "error": "invalid_slot"]))
             }

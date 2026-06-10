@@ -35,7 +35,8 @@ export const metadata: Metadata = {
     type: "website",
   },
   twitter: {
-    card: "summary_large_image",
+    // The OG asset is square (512×512); large cards expect ~1200×630 and crop badly.
+    card: "summary",
     title: "MultiViewer by Brekke",
     description: siteConfig.description,
     images: ["/og-image.png"],

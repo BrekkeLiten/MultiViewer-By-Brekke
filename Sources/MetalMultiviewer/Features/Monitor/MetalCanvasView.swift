@@ -30,7 +30,10 @@ struct MetalCanvasView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
-        coordinator.requestDisplay()
+        // No-op: every state change that affects rendering already calls
+        // requestDisplay() via MonitorAppModel/MetalRenderCoordinator, and frame
+        // arrivals redraw via onFrameUpdated. Redrawing on every SwiftUI update
+        // here forced redundant Metal passes.
     }
 
     final class Coordinator {

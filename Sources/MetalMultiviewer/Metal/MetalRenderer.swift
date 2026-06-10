@@ -92,7 +92,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         }
         self.sampler = samp
 
-        self.textureEmpty = MetalRenderer.makeSolidTexture(device: device, rgba: (0, 0, 0, 255))
+        guard let emptyTexture = MetalRenderer.makeSolidTexture(device: device, rgba: (0, 0, 0, 255)) else {
+            throw NSError(domain: "MetalMultiviewer", code: 3)
+        }
+        self.textureEmpty = emptyTexture
 
         super.init()
     }
@@ -180,8 +183,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
 
             switch layoutMode {
             case .oneUp:
-                let ps = primarySlot
-                let oneTex = feedTexture(forSlot: ps)
+                // Reuse the texture fetched for scope analysis above so the scopes and
+                // the picture can't show two different frames within one draw.
                 if oneUpScopeMonitorEnabled {
                     let scopeRegions = ScopeMonitorLayout.regions(from: scopeMonitorSplit)
                     let pictureCell = Self.ndcRect(from: scopeRegions.picture)
@@ -363,15 +366,15 @@ final class MetalRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
         uvMin: SIMD2<Float> = SIMD2(0, 0),
         uvMax: SIMD2<Float> = SIMD2(1, 1)
     ) {
-        let verts = rectNDC.makeTriangleStripVertices(uvMin: uvMin, uvMax: uvMax)
-        assert(verts.count == Self.triangleStripVertexCount)
-        let len = MemoryLayout<Vertex>.stride * verts.count
-        verts.withUnsafeBytes { raw in
-            guard let src = raw.bindMemory(to: UInt8.self).baseAddress else { return }
-            vertexBuffer.contents()
-                .advanced(by: vertexBufferOffsetBytes)
-                .copyMemory(from: src, byteCount: len)
-        }
+        // Write the strip directly into the arena buffer — no per-draw array allocation.
+        // Triangle strip order: TL, BL, TR, BR.
+        let verts = vertexBuffer.contents()
+            .advanced(by: vertexBufferOffsetBytes)
+            .assumingMemoryBound(to: Vertex.self)
+        verts[0] = Vertex(position: SIMD2(rectNDC.minX, rectNDC.maxY), uv: SIMD2(uvMin.x, uvMin.y))
+        verts[1] = Vertex(position: SIMD2(rectNDC.minX, rectNDC.minY), uv: SIMD2(uvMin.x, uvMax.y))
+        verts[2] = Vertex(position: SIMD2(rectNDC.maxX, rectNDC.maxY), uv: SIMD2(uvMax.x, uvMin.y))
+        verts[3] = Vertex(position: SIMD2(rectNDC.maxX, rectNDC.minY), uv: SIMD2(uvMax.x, uvMax.y))
 
         if let pipeline {
             encoder.setRenderPipelineState(pipeline)
@@ -511,16 +514,6 @@ private extension MetalRenderer {
             }
         }
 
-        func makeTriangleStripVertices(uvMin: SIMD2<Float> = SIMD2(0, 0), uvMax: SIMD2<Float> = SIMD2(1, 1)) -> [Vertex] {
-            // Triangle strip order: TL, BL, TR, BR
-            return [
-                Vertex(position: SIMD2(minX, maxY), uv: SIMD2(uvMin.x, uvMin.y)),
-                Vertex(position: SIMD2(minX, minY), uv: SIMD2(uvMin.x, uvMax.y)),
-                Vertex(position: SIMD2(maxX, maxY), uv: SIMD2(uvMax.x, uvMin.y)),
-                Vertex(position: SIMD2(maxX, minY), uv: SIMD2(uvMax.x, uvMax.y)),
-            ]
-        }
-
         /// Letterboxed / pillarboxed fit preserving broadcast aspect inside `cell` (NDC coords, y upward).
         static func aspectFitBroadcast(
             cell: RectNDC,
@@ -592,7 +585,7 @@ private extension MetalRenderer {
         return try device.makeLibrary(source: source, options: nil)
     }
 
-    static func makeSolidTexture(device: MTLDevice, rgba: (UInt8, UInt8, UInt8, UInt8)) -> MTLTexture {
+    static func makeSolidTexture(device: MTLDevice, rgba: (UInt8, UInt8, UInt8, UInt8)) -> MTLTexture? {
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm,
             width: 2,
@@ -600,7 +593,7 @@ private extension MetalRenderer {
             mipmapped: false
         )
         desc.usage = [.shaderRead]
-        let tex = device.makeTexture(descriptor: desc)!
+        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
         var bytes = [UInt8](repeating: 0, count: 2 * 2 * 4)
         for i in stride(from: 0, to: bytes.count, by: 4) {
             bytes[i + 0] = rgba.0

@@ -19,8 +19,14 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
     /// Program/source resolution for HUD (full NDI stream size; from metadata when receiving preview).
     private var programSourceWidth = 0
     private var programSourceHeight = 0
+
+    /// Receiver-thread-only texture ring: the CPU writes the next texture while the GPU may still be
+    /// sampling the published one (3 deep covers command buffers in flight). No lock needed.
+    private var texturePool: [MTLTexture] = []
+    private var texturePoolIndex = 0
     private var textureWidth = 0
     private var textureHeight = 0
+    private static let texturePoolDepth = 3
 
     /// NDI picture DAR (`picture_aspect_ratio` when set, else pixel `xres/yres`).
     private var broadcastAspectWidthOverHeight: Float = 1
@@ -286,20 +292,25 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
             dar = pixelAR
         }
         broadcastAspectWidthOverHeight = max(dar, 0.01)
+        lock.unlock()
 
-        if textureWidth != uploadW || textureHeight != uploadH {
-            guard let newTex = Self.makeBGRATexture(device: device, width: uploadW, height: uploadH) else {
-                lock.unlock()
-                return false
+        // Texture ring is owned by this thread; conversion + upload run without the lock so
+        // the render path's copyLatestTexture()/getters never block on a full-frame convert.
+        if textureWidth != uploadW || textureHeight != uploadH || texturePool.count < Self.texturePoolDepth {
+            var pool: [MTLTexture] = []
+            for _ in 0 ..< Self.texturePoolDepth {
+                guard let tex = Self.makeBGRATexture(device: device, width: uploadW, height: uploadH) else {
+                    return false
+                }
+                pool.append(tex)
             }
-            latestTexture = newTex
+            texturePool = pool
+            texturePoolIndex = 0
             textureWidth = uploadW
             textureHeight = uploadH
         }
-        guard let tex = latestTexture else {
-            lock.unlock()
-            return false
-        }
+        let tex = texturePool[texturePoolIndex]
+        texturePoolIndex = (texturePoolIndex + 1) % texturePool.count
 
         let uploaded: Bool
         if fourCC == Self.fourCC(UInt8(ascii: "U"), UInt8(ascii: "Y"), UInt8(ascii: "V"), UInt8(ascii: "Y")) {
@@ -332,15 +343,13 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
             )
         } else {
             Self.log.warning("Unhandled NDI FourCC \(fourCC); frame skipped.")
-            lock.unlock()
             return false
         }
 
-        guard uploaded else {
-            lock.unlock()
-            return false
-        }
+        guard uploaded else { return false }
 
+        lock.lock()
+        latestTexture = tex
         _lastFrameAt = Date()
         let notify = onFrameUpdated
         lock.unlock()
@@ -358,24 +367,14 @@ final class NDIReceiver: MonitorableProvider, VideoFeedDimensionReporting, Video
         texture tex: MTLTexture
     ) -> Bool {
         if uploadWidth == w, uploadHeight == h {
-            if srcStride == w * 4 {
-                tex.replace(
-                    region: MTLRegionMake2D(0, 0, w, h),
-                    mipmapLevel: 0,
-                    withBytes: UnsafeRawPointer(pixels),
-                    bytesPerRow: srcStride
-                )
-                return true
-            }
-            for y in 0 ..< h {
-                let srcRow = pixels.advanced(by: y * srcStride)
-                tex.replace(
-                    region: MTLRegionMake2D(0, y, w, 1),
-                    mipmapLevel: 0,
-                    withBytes: srcRow,
-                    bytesPerRow: srcStride
-                )
-            }
+            // `replace` accepts a source stride wider than the row, so non-tight strides
+            // still upload in a single call instead of one call per scanline.
+            tex.replace(
+                region: MTLRegionMake2D(0, 0, w, h),
+                mipmapLevel: 0,
+                withBytes: UnsafeRawPointer(pixels),
+                bytesPerRow: srcStride
+            )
             return true
         }
 

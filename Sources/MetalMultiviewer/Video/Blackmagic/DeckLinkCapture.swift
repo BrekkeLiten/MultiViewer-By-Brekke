@@ -17,10 +17,16 @@ final class DeckLinkCapture: MonitorableProvider, VideoFeedDimensionReporting, V
 	private var latestTexture: MTLTexture?
 	private var sourceWidth = 0
 	private var sourceHeight = 0
-	private var textureWidth = 0
-	private var textureHeight = 0
 	private var isRunning = false
 	private var _lastFrameAt: Date?
+
+	/// Capture-thread-only texture ring: the CPU writes the next texture while the GPU may still be
+	/// sampling the published one (3 deep covers command buffers in flight). No lock needed.
+	private var texturePool: [MTLTexture] = []
+	private var texturePoolIndex = 0
+	private var textureWidth = 0
+	private var textureHeight = 0
+	private static let texturePoolDepth = 3
 
 	private var thread: Thread?
 	private var lastTextureUploadAt = Date.distantPast
@@ -113,9 +119,11 @@ final class DeckLinkCapture: MonitorableProvider, VideoFeedDimensionReporting, V
 			latestTexture = nil
 			sourceWidth = 0
 			sourceHeight = 0
+			lock.unlock()
+			texturePool = []
+			texturePoolIndex = 0
 			textureWidth = 0
 			textureHeight = 0
-			lock.unlock()
 		}
 
 		let startedOk = mvDeckLinkDriverStart(drv, Int32(inputIndex))
@@ -209,33 +217,32 @@ final class DeckLinkCapture: MonitorableProvider, VideoFeedDimensionReporting, V
 			uploadH = min(max(th, 2), h)
 		}
 
-		lock.lock()
-
-		let tex: MTLTexture?
-		if textureWidth != uploadW || textureHeight != uploadH || latestTexture == nil {
-			let desc = MTLTextureDescriptor.texture2DDescriptor(
-				pixelFormat: .bgra8Unorm,
-				width: uploadW,
-				height: uploadH,
-				mipmapped: false
-			)
-			desc.usage = [.shaderRead]
-			desc.storageMode = .shared
-			tex = device.makeTexture(descriptor: desc)
-			if tex == nil {
-				Self.log.error("DeckLink: makeTexture failed for \(uploadW, privacy: .public)×\(uploadH, privacy: .public).")
+		// Texture ring is owned by this thread; the upload below runs without the lock so the
+		// render path's copyLatestTexture()/getters never block on a full-frame scale + copy.
+		if textureWidth != uploadW || textureHeight != uploadH || texturePool.count < Self.texturePoolDepth {
+			var pool: [MTLTexture] = []
+			for _ in 0 ..< Self.texturePoolDepth {
+				let desc = MTLTextureDescriptor.texture2DDescriptor(
+					pixelFormat: .bgra8Unorm,
+					width: uploadW,
+					height: uploadH,
+					mipmapped: false
+				)
+				desc.usage = [.shaderRead]
+				desc.storageMode = .shared
+				guard let tex = device.makeTexture(descriptor: desc) else {
+					Self.log.error("DeckLink: makeTexture failed for \(uploadW, privacy: .public)×\(uploadH, privacy: .public).")
+					return false
+				}
+				pool.append(tex)
 			}
-			latestTexture = tex
+			texturePool = pool
+			texturePoolIndex = 0
 			textureWidth = uploadW
 			textureHeight = uploadH
-		} else {
-			tex = latestTexture
 		}
-
-		guard let tex else {
-			lock.unlock()
-			return false
-		}
+		let tex = texturePool[texturePoolIndex]
+		texturePoolIndex = (texturePoolIndex + 1) % texturePool.count
 
 		let uploaded: Bool
 		if uploadW == w, uploadH == h {
@@ -279,11 +286,13 @@ final class DeckLinkCapture: MonitorableProvider, VideoFeedDimensionReporting, V
 			}
 		}
 
+		guard uploaded else { return false }
+
+		lock.lock()
+		latestTexture = tex
 		let notify = onFrameUpdated
 		lock.unlock()
-		if uploaded {
-			notify?()
-		}
-		return uploaded
+		notify?()
+		return true
 	}
 }

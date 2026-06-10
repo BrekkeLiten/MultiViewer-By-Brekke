@@ -98,7 +98,9 @@ struct MainMonitorView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .metalMultiviewerPictureMonitoringChanged)) { _ in
-            model.syncPictureMonitoringFromDisk()
+            // The store is the live source of truth (HTTP control mutates it directly);
+            // reloading from disk here would revert remote toggles to stale persisted values.
+            model.applyPictureMonitoring(model.monitoringStore.get(), persist: false)
         }
     }
 

@@ -20,7 +20,6 @@
   --color-accent-tally: var(--accent-tally);
   --color-accent-signal: var(--accent-signal);
   --font-display: var(--font-syne);
-  --font-body: var(--font-dm-sans);
   --font-mono: var(--font-ibm-plex-mono);
 }
 
